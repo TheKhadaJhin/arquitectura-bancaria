@@ -10,6 +10,9 @@ Preparé esta base para revisar con Diego y el equipo la arquitectura de la apli
 |---|---|
 | [Arquitectura general](01-arquitectura.md) | App móvil, proveedor de identidad, API Gateway, backend modular, PostgreSQL y límites de confianza. |
 | [Modelo relacional](02-modelo-relacional.md) | Entidades, campos, claves, atomicidad, idempotencia, concurrencia y verificaciones previstas. |
+| [Autenticación](03-autenticacion.md) |  |
+| [Contrato](04-contratos-api.md) |  |
+| [Threat Model con STRIDE](05-threat-model.md) |  |
 
 ## Alcance inicial
 
