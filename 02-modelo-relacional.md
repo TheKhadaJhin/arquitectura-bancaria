@@ -1,16 +1,21 @@
-# Propuesta de modelo relacional
+# Modelo lógico de transferencias
 
-Armé esta propuesta como base para revisar con Diego y el equipo. Separé la operación de sus movimientos para definir cómo registrar una transferencia, confirmarla completa y resolver los reintentos sin duplicarla.
+Propongo un **ledger de partida doble en PostgreSQL**: cada operación confirmada agrupa movimientos contables balanceados y conserva su historial. Esta es la base para revisar con Diego y el equipo.
 
-**Estado:** diseño inicial, pendiente de implementación y pruebas.
+**Estado:** diseño propuesto; implementación y pruebas pendientes.
 
-**Alcance:** transferencias internas entre dos cuentas distintas y activas, en ARS, sin comisiones, retenciones ni descubierto.
+**Alcance:** transferencias internas en ARS entre dos cuentas de clientes distintas y activas, sin comisiones, retenciones ni descubierto.
 
-**Supuesto principal:** nuestra PostgreSQL registra los movimientos de dinero de forma autoritativa. Si las operaciones las ejecuta un core bancario externo, tenemos que revisar los estados, la confirmación y la conciliación: una transacción local no cubre los cambios de ese otro sistema.
+**Supuesto:** PostgreSQL es el registro autoritativo del dinero. Si un core externo ejecuta las operaciones, debemos revisar la confirmación, los estados y la conciliación; una transacción SQL local no garantiza el resultado externo.
 
-## Entidades y relaciones
+## 1. Entidades y claves
 
-Propongo cuatro entidades: `users`, `accounts`, `transactions` y `ledger_entries`. El diagrama muestra sus campos principales; el listado completo de campos y restricciones está al final del documento.
+| Entidad | Responsabilidad |
+|---|---|
+| `users` | Vincula la identidad del proveedor con el usuario local. |
+| `accounts` | Identifica la cuenta del cliente, su titular, moneda y estado. |
+| `transactions` | Agrupa la operación, su resultado y los datos de idempotencia. |
+| `ledger_entries` | Registra cada débito o crédito de la operación. |
 
 ```mermaid
 erDiagram
@@ -24,20 +29,28 @@ erDiagram
         uuid id PK
         text auth_issuer
         string auth_subject
+        string status
+        timestamptz created_at
     }
     ACCOUNTS {
         uuid id PK
         uuid user_id FK
         string currency
         string status
+        timestamptz created_at
     }
     TRANSACTIONS {
         uuid id PK
         uuid initiated_by_user_id FK
+        string operation_type
         string status
         string currency
         string idempotency_key
         text request_hash
+        timestamptz created_at
+        timestamptz posted_at
+        string rejection_code
+        uuid reversal_of_id FK
     }
     LEDGER_ENTRIES {
         uuid id PK
@@ -49,180 +62,134 @@ erDiagram
     }
 ```
 
-### Notación
+**Lectura:** `PK` es clave primaria y `FK`, foránea. `||` significa exactamente uno; `o{`, cero o muchos. Las líneas discontinuas indican relaciones no identificadoras: las FK mostradas no forman parte de la PK. Una cuenta puede no tener movimientos; una operación rechazada no tiene entradas.
 
-Los extremos de cada relación indican su cardinalidad:
+**Tipos:** identificadores `UUID`; fechas `TIMESTAMPTZ`; `amount NUMERIC(20,2)`; moneda `VARCHAR(3)`; `auth_subject VARCHAR(255)`; `idempotency_key VARCHAR(128)`. `string` representa texto en el diagrama.
 
-| Símbolo a la derecha | Lectura |
-|---|---|
-| `\|\|` | Exactamente uno. |
-| `o\|` | Cero o uno. |
-| `o{` | Cero o muchos. |
-| `\|{` | Uno o muchos. |
+Los campos son obligatorios salvo `posted_at`, `rejection_code` y `reversal_of_id`, que corresponden respectivamente a confirmaciones, rechazos y reversiones. `reversal_of_id` referencia `transactions.id`.
 
-Por ejemplo, un usuario puede tener cero o muchas cuentas y cada cuenta pertenece a un usuario. `PK` identifica la clave primaria y `FK` una clave foránea. Las líneas discontinuas (`..`) representan relaciones no identificadoras: cada tabla tiene su propio `id` y las FK mostradas no forman parte de esa PK. La línea discontinua no vuelve opcional la referencia.
+## 2. Partida doble y saldo
 
-### Responsabilidad de cada entidad
+Por operación y moneda, **total de débitos = total de créditos**. Para la transferencia simple se exigen dos entradas: una en el origen y otra en el destino, por el importe autorizado.
 
-| Entidad | Responsabilidad |
-|---|---|
-| `users` | Identifica al usuario dentro de nuestra aplicación. |
-| `accounts` | Identifica la cuenta, su titular, moneda y estado. |
-| `transactions` | Registra la operación completa, quién la inició, su resultado y los datos de idempotencia. |
-| `ledger_entries` | Registra cuánto afecta esa operación a cada cuenta. |
+Vemos las cuentas de clientes desde la entidad: sus saldos son pasivos, porque representan dinero que esta les debe. En este modelo, `amount` negativo codifica un débito y positivo, un crédito. Para estas cuentas, el débito reduce el saldo y el crédito lo aumenta.
 
-Incluí `ledger_entries` para registrar por separado el efecto de una operación sobre cada cuenta. Una transferencia genera una entrada negativa en el origen y una positiva en el destino, ambas vinculadas a la misma operación.
+**Ejemplo: T1 transfiere ARS 10.000 de A a B.**
 
-El iniciador debe estar autorizado a debitar la cuenta origen; la cuenta destino puede pertenecer a otro usuario. Las FK protegen las relaciones, pero la autorización corresponde al backend.
+| Operación | Línea | Cuenta | Moneda | `amount` | Interpretación |
+|---|---:|---|---|---:|---|
+| T1 | 1 | A | ARS | −10.000,00 | Débito al origen. |
+| T1 | 2 | B | ARS | +10.000,00 | Crédito al destino. |
 
-El modelo permite cuentas sin movimientos y operaciones rechazadas sin entradas. Una operación confirmada debe tener al menos dos entradas balanceadas; para la transferencia simple de este alcance se exigen exactamente dos.
+T1, A y B abrevian UUID. La suma es cero; la columna de interpretación explica el signo y no se almacena.
 
-### Ejemplo de transferencia
+El saldo de una cuenta de cliente es la suma de sus entradas vinculadas a operaciones `POSTED`, incluida su apertura. `accounts` no almacena un saldo separado. Si incorporamos cuentas de otra naturaleza, deberemos adaptar el cálculo: por ejemplo, un débito aumenta el saldo de un activo.
 
-Operación T1: transferir **ARS 10.000** de A a B.
+**Límite del modelo:** falta definir las cuentas internas y las contrapartidas de apertura. El `user_id` obligatorio actual solo representa cuentas de clientes. Esta ampliación es necesaria para registrar fondos iniciales, depósitos o retiros.
 
-| `transaction_id` | `line_number` | `account_id` | `currency` | `amount` |
-|---|---:|---|---|---:|
-| T1 | 1 | A | ARS | −10.000,00 |
-| T1 | 2 | B | ARS | +10.000,00 |
+## 3. Confirmación de una transferencia
 
-T1, A y B son identificadores abreviados; en el modelo son UUID. Propongo `NUMERIC(20,2)` para los importes en ARS, con validación de escala antes de guardar. La precisión deberá revisarse si incorporamos otras monedas.
+Precondiciones: usuario autenticado y activo, autorización para debitar el origen, cuentas distintas y activas, moneda admitida e importe válido. El destino puede pertenecer a otro usuario.
 
-En esta versión, el saldo contable se obtiene sumando las entradas de la cuenta asociadas a operaciones `POSTED`. `accounts` no tiene un campo de saldo almacenado.
-
-## Atomicidad
-
-Propongo guardar la operación y sus entradas dentro de una única transacción de PostgreSQL. Para una solicitud nueva, la preparación de T1 incluye reclamar la clave de idempotencia dentro de esa misma transacción SQL. La solicitud debe estar autenticada y autorizada antes de contabilizarse.
-
-El siguiente diagrama resume la confirmación y los fallos técnicos anteriores al commit:
+Para una solicitud nueva, todas las escrituras se realizan dentro de **una transacción SQL**:
 
 ```mermaid
 flowchart TB
     subgraph SQL["Una transacción de PostgreSQL"]
-        A["BEGIN y preparación de T1"] --> B["Bloquear cuentas y volver a comprobar fondos"]
-        B --> C["Escribir las dos entradas de T1"]
-        C --> D{"¿Escritura y validaciones completas?"}
-        D -->|Sí| E["Marcar POSTED y ejecutar COMMIT"]
-        D -->|Fallo técnico| F["ROLLBACK de toda la operación"]
+        A["BEGIN y reclamar clave de idempotencia"] --> B["Bloquear cuentas en orden común"]
+        B --> C["Revalidar estado y consultar saldo"]
+        C --> D{"¿Fondos suficientes?"}
+        D -->|Sí| E["Insertar entradas y validar el balance"]
+        E --> F["Marcar POSTED y COMMIT"]
+        D -->|No| G["Guardar REJECTED sin entradas y COMMIT"]
     end
-    E --> G["Confirmar resultado a la app"]
-    F --> H["Ningún movimiento de T1 queda confirmado"]
 ```
 
-Si ocurre un fallo técnico antes del commit, se revierten todas las escrituras de ese intento, incluida la operación y la clave reclamada. Esto también aplica si el fallo ocurre antes de la comprobación mostrada en el diagrama.
+Un fallo técnico antes del commit provoca `ROLLBACK` de todo el intento, incluida la clave reclamada. Si el commit se completó pero se perdió la respuesta, la operación sigue confirmada: el cliente reintenta con la misma clave.
 
-Un rechazo de negocio, como fondos insuficientes, se puede confirmar como `REJECTED` sin entradas. Así queda registrado el resultado y un reintento con la misma clave puede recuperarlo.
-
-| Resultado | Cuenta A | Cuenta B |
-|---|---:|---:|
-| Antes del intento | 100.000,00 | 20.000,00 |
-| T1 confirmada | 90.000,00 | 30.000,00 |
-| T1 deshecha por fallo técnico | 100.000,00 | 20.000,00 |
-
-La fila de `transactions` representa la operación de negocio; la transacción SQL agrupa sus escrituras. La confirmación debe evitar que quede un débito registrado sin su crédito.
-
-Si el commit se completó y se perdió la respuesta, la operación sigue confirmada. Ante ese resultado incierto, el cliente debe reintentar con la misma clave.
-
-## Idempotencia
-
-La app asigna una clave a una intención de transferencia y conserva esa clave cuando reintenta. El backend obtiene el usuario de la identidad autenticada y calcula un hash del contenido normalizado.
-
-```mermaid
-flowchart TB
-    A["Solicitud de U1 con clave K1"] --> B["Intentar registrar la clave con UNIQUE"]
-    B --> C{"¿Se registró una clave nueva?"}
-    C -->|Sí| D["Procesar la operación una vez"]
-    C -->|Ya existe| E{"¿Coincide request_hash?"}
-    E -->|Sí| F["Devolver la operación existente"]
-    E -->|No| G["Rechazar por conflicto"]
-```
-
-Propongo resolver la unicidad en la base mediante:
-
-```sql
-UNIQUE (initiated_by_user_id, idempotency_key)
-```
-
-La clave se reclama al intentar registrar la operación, con una escritura atómica protegida por la restricción. Consultar primero si existe y luego insertar no alcanza para evitar carreras entre peticiones.
-
-Si otra petición con esa clave sigue ejecutándose, necesitamos una política de espera y reintento con tiempos acotados. El cliente debe conservar la clave original hasta resolver el resultado.
-
-| Petición | Resultado esperado |
+| Estado | Significado |
 |---|---|
-| U1, K1, A a B, ARS 10.000 por primera vez | Crear y procesar T1. |
-| U1, K1, A a B, ARS 10.000 otra vez | Devolver T1 sin nuevos movimientos. |
-| U1, K1, A a B, ARS 15.000 | Rechazar el cambio de contenido. |
+| `PENDING` | Preparación transitoria dentro de la transacción SQL. |
+| `POSTED` | Operación confirmada con sus entradas completas. |
+| `REJECTED` | Rechazo de negocio registrado sin entradas. |
 
-El backend calcula `request_hash` a partir del tipo de operación, origen, destino, moneda e importe normalizados. Si la clave ya existe, se compara el hash: con el mismo contenido se devuelve la operación existente; con contenido distinto se rechaza por conflicto. No se confía en un hash enviado por el cliente.
+La fila de `transactions` identifica la operación de negocio; la transacción SQL garantiza que sus escrituras se confirmen juntas. El procesamiento asíncrono queda fuera de este alcance.
 
-La clave no reemplaza la autenticación ni la autorización. Su política de conservación debe cubrir el período de reintentos admitido.
+### Idempotencia: evitar duplicados
 
-## Concurrencia
+La app conserva una clave por intención de transferencia. El backend obtiene el usuario del token validado y calcula `request_hash` con tipo de operación, origen, destino, moneda e importe normalizados.
 
-La idempotencia cubre reintentos de una misma intención. Dos transferencias distintas usan claves diferentes y pueden competir por el mismo saldo.
-
-Para esta versión propongo `READ COMMITTED` con bloqueo de las cuentas involucradas en un orden común. Después de adquirir los bloqueos, se vuelve a consultar el saldo en una sentencia nueva. La comprobación de fondos y las escrituras se mantienen dentro de la misma transacción SQL.
-
-**Ejemplo:** A tiene 100.000 y llegan solicitudes por 80.000 y 70.000. Si la primera confirma 80.000, la segunda encuentra 20.000 al conseguir el bloqueo y rechaza los 70.000.
-
-Todos los caminos que escriban movimientos deben respetar ese protocolo. Bloquear la fila de una cuenta no impide por sí solo que otro proceso inserte entradas directamente; por eso hay que restringir las escrituras que eludan la contabilización. Los tiempos máximos de espera y los reintentos por abortos quedan por definir e implementar.
-
-## Campos y restricciones
-
-### Campos del modelo propuesto
-
-| Entidad | Campos |
+| Resultado de reclamar la clave | Acción |
 |---|---|
-| `users` | `id UUID PK`, `auth_issuer TEXT`, `auth_subject VARCHAR(255)`, `status`, `created_at TIMESTAMPTZ`. |
-| `accounts` | `id UUID PK`, `user_id UUID FK`, `currency VARCHAR(3)`, `status`, `created_at TIMESTAMPTZ`. |
-| `transactions` | `id UUID PK`, `initiated_by_user_id UUID FK`, `operation_type`, `status`, `currency VARCHAR(3)`, `idempotency_key VARCHAR(128)`, `request_hash TEXT`, `created_at TIMESTAMPTZ`, `posted_at TIMESTAMPTZ`, `rejection_code`, `reversal_of_id UUID FK`. |
-| `ledger_entries` | `id UUID PK`, `transaction_id UUID`, `account_id UUID`, `line_number INTEGER`, `currency VARCHAR(3)`, `amount NUMERIC(20,2)`. |
+| Clave nueva | Procesar la transferencia. |
+| Clave existente y mismo hash | Devolver la operación registrada, sin nuevos movimientos. |
+| Clave existente y distinto hash | Rechazar por conflicto. |
 
-Los campos son obligatorios salvo los condicionales: `posted_at` corresponde a operaciones `POSTED`, `rejection_code` a operaciones `REJECTED` y `reversal_of_id` a reversiones. Los tipos y restricciones de los estados y códigos se concretarán al implementar el esquema. `string` en el diagrama representa texto; los tipos SQL propuestos se detallan en esta tabla.
+La restricción `UNIQUE(initiated_by_user_id, idempotency_key)` resuelve la competencia entre peticiones. La reclamación debe usarla atómicamente; consultar y luego insertar sin gestionar el conflicto no alcanza. Si otra petición sigue ejecutándose, se aplicará una espera acotada y una política de reintento por definir.
 
-### Restricciones y responsabilidades
+### Concurrencia: proteger el saldo
+
+Para operaciones distintas propongo `READ COMMITTED` y bloqueo de todas las cuentas involucradas, siempre en el mismo orden. Después de adquirir los bloqueos, una sentencia nueva revalida su estado y consulta el saldo; los bloqueos se mantienen hasta finalizar la transacción.
+
+Todos los procesos que contabilicen deben seguir este protocolo. Hay que restringir las escrituras directas que lo eludan: el bloqueo de una cuenta no impide por sí solo insertar entradas desde otro proceso.
+
+## 4. Restricciones del modelo
 
 | Regla | Mecanismo propuesto |
 |---|---|
-| Una identidad externa por usuario local | `UNIQUE(auth_issuer, auth_subject)`. |
-| Una clave de idempotencia por usuario | `UNIQUE(initiated_by_user_id, idempotency_key)` y comparación de `request_hash`. |
-| Una numeración de entradas por operación | `UNIQUE(transaction_id, line_number)`, con número de línea positivo. |
-| Cuenta y operación con la moneda de cada entrada | FK compuestas `(account_id, currency)` y `(transaction_id, currency)`, con `UNIQUE(id, currency)` en las tablas referenciadas. |
-| Importes válidos | Decimales exactos, finitos y distintos de cero en las entradas. Importe positivo en la solicitud y escala validada antes de guardar. |
-| Confirmación balanceada | Al menos dos entradas cuya suma sea cero por operación y moneda. En la transferencia simple se exigen exactamente dos, por el importe autorizado. |
-| Estados coherentes | Usuarios ACTIVE/BLOCKED. Cuentas ACTIVE/BLOCKED/CLOSED. Operaciones PENDING/POSTED/REJECTED. Tipos TRANSFER/REVERSAL. |
-| Historial conservado | Impedir cambios o borrados de operaciones confirmadas y sus movimientos. Corregir mediante operaciones compensatorias autorizadas. |
-| Reversión completa única | Como máximo una reversión completa confirmada por original, con validaciones e índice condicional a concretar. |
+| Identidad local única | `UNIQUE(auth_issuer, auth_subject)`, correspondientes a `(iss, sub)` validados. |
+| Idempotencia por usuario | `UNIQUE(initiated_by_user_id, idempotency_key)` y comparación del hash calculado por el servidor. |
+| Numeración de entradas | `UNIQUE(transaction_id, line_number)` y línea positiva. |
+| Moneda coherente | FK compuestas `(account_id, currency)` y `(transaction_id, currency)`; `UNIQUE(id, currency)` en sus tablas de destino. |
+| Importes válidos | Decimales exactos, finitos y no nulos ni cero; solicitud positiva y escala validada antes de guardar. |
+| Operación balanceada | Suma con signo igual a cero por operación y moneda. Dos entradas para esta transferencia, con cuentas e importe autorizados. |
+| Estados y tipos válidos | Usuarios: ACTIVE/BLOCKED. Cuentas: ACTIVE/BLOCKED/CLOSED. Operaciones: PENDING/POSTED/REJECTED. Tipos: TRANSFER/REVERSAL. |
+| Historial confirmado conservado | Impedir cambios y borrados de operaciones `POSTED` y sus entradas. |
+| Reversión completa única | Como máximo una reversión completa confirmada por original; autorización e índice condicional por concretar. |
 
-La suma de varias filas no se puede imponer con un `CHECK` ordinario. Queda por concretar el mecanismo que valide estas reglas al confirmar, junto con la restricción de escrituras. Además del balance en cero, se deben validar las cuentas y el importe autorizados.
+El balance entre varias filas requiere una rutina de contabilización y/o validación diferida en la base; un `CHECK` ordinario no alcanza. Los mecanismos concretos y los permisos de escritura siguen pendientes de implementación.
 
-En esta propuesta, `PENDING` es transitorio dentro de la transacción SQL. El procesamiento asíncrono de operaciones pendientes queda fuera del alcance actual.
+## 5. Reconstrucción, auditoría y recuperación
 
-## Verificaciones previstas
+- **Correcciones:** crear una operación compensatoria autorizada con `reversal_of_id`. La original conserva su estado `POSTED`; el saldo incluye ambas operaciones.
+- **Reconstrucción:** recalcular desde un historial completo y un corte consistente, sin volver a ejecutar transferencias. Un saldo precalculado futuro debe ser verificable contra ese mismo corte.
+- **Consultas históricas:** distinguir la fecha efectiva del movimiento de cuándo se registró. Las fechas y el orden del corte siguen pendientes; `posted_at` no garantiza el orden de commit.
+- **Auditoría:** registrar identificador, fecha, actor, acción, recurso, resultado, `request_id` y operación cuando exista. Las confirmaciones deben quedar consistentes con el commit; los intentos fallidos necesitan un registro que sobreviva al rollback y no los presente como movimientos confirmados.
+- **Protección:** restringir cambios y accesos al historial, contemplar alteraciones privilegiadas y excluir tokens, contraseñas y datos sensibles innecesarios de los registros.
+- **Recuperación:** respaldos, archivado de WAL cuando corresponda y pruebas de restauración, con pérdida máxima de datos y tiempo de recuperación acordados. El WAL no sustituye la auditoría de negocio.
+- **Conciliación:** si interviene un core externo, contrastar sus identificadores y resultados con los nuestros; reconstruir la base local no confirma una ejecución externa.
 
-| Caso | Evidencia esperada |
+## 6. Pendientes para acordar con el equipo
+
+| Decisión | Qué falta definir |
 |---|---|
-| Fallo entre la primera y la segunda entrada | No queda un débito confirmado aislado. |
-| Reintentos simultáneos con la misma clave y contenido | Una sola operación efectiva. |
-| Clave reutilizada con otro importe | Conflicto y ningún movimiento adicional. |
-| Respuesta perdida después del commit | El reintento recupera la operación ya confirmada. |
-| Dos operaciones distintas compitiendo por saldo | No confirman ambas si los fondos no alcanzan. |
+| Autoridad sobre el dinero | Registro local o integración con un core externo. |
+| Cobertura contable | Plan mínimo de cuentas, cuentas internas, apertura y permisos; confirmar monedas, comisiones y descubierto. |
+| Garantías en la base | Contabilización, inmutabilidad, estados y reversiones completas. |
+| Reintentos | Tiempos de bloqueo, recuperación de abortos y conservación de claves de idempotencia. |
+| Trazabilidad y recuperación | Esquema de auditoría, fechas y cortes, retención, protección y objetivos de restauración y conciliación. |
 
-Estas pruebas están previstas; todavía no se ejecutaron.
+## 7. Verificaciones previstas
 
-## Puntos para revisar con el equipo
+| Caso | Resultado esperado |
+|---|---|
+| Fallo entre entradas o importes desbalanceados | Ningún movimiento parcial confirmado. |
+| Reintentos simultáneos con la misma clave | Una sola operación efectiva. |
+| Misma clave con distinto contenido | Conflicto, sin nuevos movimientos. |
+| Respuesta perdida después del commit | El reintento recupera la operación existente. |
+| Transferencias distintas compiten por saldo | No confirman ambas si los fondos no alcanzan. |
+| Reconstrucción con apertura y reversión | Saldo correcto para el corte elegido; original y compensación conservadas. |
+| Rechazo o rollback | Auditoría del intento, sin presentarlo como confirmación. |
+| Edición de entradas confirmadas desde la aplicación | Escritura rechazada. |
+| Restauración y reconstrucción | Historial recuperado y verificado hasta el punto acordado. |
 
-- Confirmar si nuestra base registra los movimientos de dinero o si debemos integrarnos con un core externo.
-- Validar el alcance inicial: monedas, comisiones, retenciones y política de descubierto.
-- Definir cómo se impondrán el balance de las entradas y la inmutabilidad de las operaciones confirmadas.
-- Acordar tiempos de bloqueo, reintentos y conservación de claves de idempotencia.
-- Concretar la autorización y las restricciones de las reversiones completas.
+Estas verificaciones están previstas; aún no se ejecutaron.
 
 ## Referencias
 
+- [Modern Treasury: transacciones de ledger y partida doble](https://docs.moderntreasury.com/ledgers/docs/ledger-transactions-overview).
+- [TigerBeetle: naturaleza de las cuentas, débitos y créditos](https://docs.tigerbeetle.com/coding/financial-accounting/).
 - [Mermaid: entidades y relaciones](https://mermaid.js.org/syntax/entityRelationshipDiagram.html).
-- [PostgreSQL: transacciones](https://www.postgresql.org/docs/current/tutorial-transactions.html).
-- [PostgreSQL: restricciones](https://www.postgresql.org/docs/current/ddl-constraints.html).
-- [PostgreSQL: INSERT y ON CONFLICT](https://www.postgresql.org/docs/current/sql-insert.html).
-- [PostgreSQL: bloqueos explícitos](https://www.postgresql.org/docs/current/explicit-locking.html).
-- [PostgreSQL: aislamiento de transacciones](https://www.postgresql.org/docs/current/transaction-iso.html).
+- PostgreSQL: [transacciones](https://www.postgresql.org/docs/current/tutorial-transactions.html), [restricciones](https://www.postgresql.org/docs/current/ddl-constraints.html), [INSERT y ON CONFLICT](https://www.postgresql.org/docs/current/sql-insert.html), [bloqueos](https://www.postgresql.org/docs/current/explicit-locking.html) y [aislamiento](https://www.postgresql.org/docs/current/transaction-iso.html).
+- [PostgreSQL: archivado continuo y recuperación](https://www.postgresql.org/docs/current/continuous-archiving.html).
+- [OWASP: registro de eventos](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
