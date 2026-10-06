@@ -146,6 +146,7 @@ Todos los procesos que contabilicen deben seguir este protocolo. Hay que restrin
 | Estados y tipos válidos | Usuarios: ACTIVE/BLOCKED. Cuentas: ACTIVE/BLOCKED/CLOSED. Operaciones: PENDING/POSTED/REJECTED. Tipos: TRANSFER/REVERSAL. |
 | Historial confirmado conservado | Impedir cambios y borrados de operaciones `POSTED` y sus entradas. |
 | Reversión completa única | Como máximo una reversión completa confirmada por original; autorización e índice condicional por concretar. |
+| Acceso a la base | Consultas parametrizadas y rol de ejecución sin privilegios administrativos; limitar escrituras financieras al circuito de contabilización. |
 
 El balance entre varias filas requiere una rutina de contabilización y/o validación diferida en la base; un `CHECK` ordinario no alcanza. Los mecanismos concretos y los permisos de escritura siguen pendientes de implementación.
 
@@ -184,6 +185,10 @@ El balance entre varias filas requiere una rutina de contabilización y/o valida
 | Restauración y reconstrucción | Historial recuperado y verificado hasta el punto acordado. |
 
 Estas verificaciones están previstas; aún no se ejecutaron.
+
+## Relación con el modelo de amenazas
+
+El [análisis STRIDE](05-threat-model.md) vincula estas reglas con TM-04–TM-08, TM-10, TM-12 y TM-13: autorización, alteración del dinero, duplicados, auditoría, saturación y recuperación. Antes de implementar deben concretarse los permisos de escritura, el mecanismo de contabilización y las evidencias de esas pruebas.
 
 ## Referencias
 
