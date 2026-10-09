@@ -1,12 +1,14 @@
-# Modelo de amenazas STRIDE
+# 05 · Modelo de amenazas STRIDE
 
-Propongo este análisis como parte del diseño inicial de la app bancaria. Relaciona los flujos del sistema con amenazas, controles y evidencias que debemos revisar con Diego y el equipo.
+Presento el análisis inicial de amenazas de la aplicación bancaria. Cada escenario se vincula con los flujos afectados, los controles propuestos y la evidencia necesaria para verificarlos.
 
-**Estado: análisis inicial, 6 de octubre de 2026.** Todos los controles están propuestos; su implementación y verificación están pendientes. Ninguna amenaza se considera cerrada por aparecer en esta tabla.
+**Estado:** análisis inicial. Los controles están propuestos y su implementación y verificación están pendientes. Las 13 amenazas identificadas permanecen abiertas.
 
 ## 1. Alcance y supuestos
 
-Incluye app iOS, proveedor OIDC, API Gateway, backend modular, PostgreSQL, auditoría y recuperación. Revisamos login, tokens, consulta de saldo y el diseño de transferencias internas y reversiones. El contrato de transferencias todavía no está definido.
+Incluye app Android e iOS, proveedor OIDC, API Gateway, backend modular, PostgreSQL, auditoría y recuperación. Cubre login, tokens, consulta de saldo y el diseño de transferencias internas y reversiones. El contrato de transferencias todavía no está definido.
+
+El alcance de ambas plataformas está confirmado; el framework móvil y la solución de almacenamiento de Android siguen pendientes. TM-02 y TM-03 requieren revisar por plataforma el retorno del login, persistencia, copias, acceso a claves y cierre de sesión. Este análisis común todavía necesita concretarse con las bibliotecas y configuraciones elegidas.
 
 El supuesto actual es que PostgreSQL registra el dinero de forma autoritativa. Incorporar un core externo requiere ampliar los flujos y analizar confirmaciones, duplicados y conciliación entre sistemas.
 
@@ -19,7 +21,7 @@ El supuesto actual es que PostgreSQL registra el dinero de forma autoritativa. I
 ```mermaid
 flowchart TB
     subgraph DISPOSITIVO["Dispositivo del cliente"]
-        APP["App iOS"]
+        APP["App Android o iOS"]
     end
     subgraph IDENTIDAD["Dominio de identidad"]
         IDP["Proveedor OIDC"]
@@ -48,7 +50,7 @@ F1 agrupa el login por navegador del sistema y los intercambios de tokens de la 
 
 Los bloques muestran dominios lógicos de confianza, no una red ya desplegada. Auditoría y respaldos son capacidades a concretar; su ubicación y sus permisos deben impedir que una misma credencial comprometa todas las copias de la evidencia.
 
-| Cruce | Qué debemos verificar |
+| Cruce | Controles a verificar |
 |---|---|
 | F1/F7: cliente o backend → identidad | Emisor y URL configurados, redirección registrada, claves confiables y validaciones OIDC/JWT. |
 | F2: cliente → gateway | Canal protegido; límites de entrada; contenido tratado como no confiable. |
@@ -68,7 +70,7 @@ La prioridad es una estimación inicial según impacto y exposición: **alta** p
 |---|---|---|---|
 | TM-01 | S | Presentar un token falso, de otro emisor o destinado a otra aplicación; inducir confianza en claves arbitrarias. F2/F7. | Alta |
 | TM-02 | S/T | Interceptar un código o mezclar respuestas de distintos intentos de login para iniciar otra sesión. F1. | Alta |
-| TM-03 | I/S | Extraer tokens del dispositivo, logs o tráfico y reutilizarlos. F1/F2/F5. | Alta |
+| TM-03 | I/S | Extraer tokens del dispositivo, sus copias, logs o tráfico y reutilizarlos. F1/F2/F5 y persistencia local. | Alta |
 | TM-04 | I/E | Cambiar `account_id` o atribuirse otro usuario para consultar o debitar una cuenta ajena. F2–F4. | Alta |
 | TM-05 | T/E | Enviar importes, monedas u orígenes inválidos, o ejecutar una reversión sin autorización. F2–F4. | Alta |
 | TM-06 | T | Repetir o lanzar operaciones en paralelo para duplicar un efecto o gastar el mismo saldo varias veces. F2–F4. | Alta |
@@ -84,11 +86,11 @@ La prioridad es una estimación inicial según impacto y exposición: **alta** p
 
 Las pruebas siguientes se ejecutarán en un entorno autorizado, con datos ficticios. **Estado común de las 13 amenazas: abierto; control propuesto y evidencia pendiente.**
 
-| ID | Control propuesto | Evidencia para revisarlo |
+| ID | Control propuesto | Evidencia esperada |
 |---|---|---|
 | TM-01 | Validar firma, algoritmo permitido, emisor, audiencia, vigencia y perfil; obtener claves solo de configuración confiable. | Rechazar tokens falsos, vencidos, de otra audiencia o ID tokens usados como acceso; no consultar URL indicadas por un atacante. |
-| TM-02 | Authorization Code con PKCE S256, `state`, `nonce` y redirecciones registradas, mediante biblioteca OIDC. | Un retorno con `state` incorrecto, un verificador ajeno o un `nonce` inválido no crea sesión. |
-| TM-03 | Keychain, access token en memoria, TLS, exclusión de secretos de logs y rotación de refresh tokens. Acordar duración, revocación y MFA. | Inspeccionar persistencia y logs; verificar rotación/reutilización con el proveedor y manejo seguro de Keychain no accesible. |
+| TM-02 | Authorization Code con PKCE S256, `state`, `nonce` y redirecciones registradas para cada plataforma, mediante biblioteca OIDC. | En Android e iOS, un retorno con `state` incorrecto, un verificador ajeno o un `nonce` inválido no crea sesión; verificar también la entrega del retorno a la app prevista. |
+| TM-03 | Keychain en iOS; cifrado del refresh token con claves protegidas por Keystore como criterio propuesto para Android, con integración pendiente. Access token en memoria, TLS, secretos fuera de logs y rotación. Acordar duración, revocación y MFA. | Revisar persistencia, copias, logs y borrado de credenciales en ambas plataformas; verificar rotación/reutilización, almacenamiento inaccesible y pérdida de claves sin reducir la protección. |
 | TM-04 | Identidad desde `(iss, sub)` validado; permiso funcional y autorización sobre cada cuenta. | Dos usuarios y cuentas distintas: cambiar el identificador no devuelve saldo ajeno ni permite debitarlo; consulta ajena e inexistente responden igual. |
 | TM-05 | Validar cuenta, moneda, importe exacto y límites; comprobar autorización de transferencia y reversión. | Rechazar importe inválido, moneda incoherente y reversión no autorizada. Un asiento balanceado por sí solo no satisface estas pruebas. |
 | TM-06 | Clave única por usuario, hash del contenido, atomicidad y bloqueo ordenado con nueva lectura del saldo. | Reintentos, fallo entre entradas y operaciones concurrentes no duplican efectos ni exceden los fondos. |
@@ -104,7 +106,7 @@ La autorización por recurso debe comprobarse en cada operación protegida. [3] 
 
 ## 5. Responsabilidades y vínculos
 
-Las áreas son propuestas de responsabilidad; el equipo debe asignar personas y revisores. No implican servicios nuevos.
+Las responsabilidades se agrupan por área. Queda pendiente asignar responsables y revisores; esta distribución no define servicios adicionales.
 
 | Área | Amenazas principales | Documento relacionado |
 |---|---|---|
@@ -115,16 +117,17 @@ Las áreas son propuestas de responsabilidad; el equipo debe asignar personas y 
 
 ## 6. Decisiones abiertas y riesgo residual
 
-- **Sesión comprometida:** un bearer token válido robado puede utilizarse mientras siga vigente. Debemos acordar duración, revocación, MFA y reautenticación para operaciones sensibles; Keychain y PKCE no eliminan por sí solos ese riesgo.
+- **Protección local en Android:** confirmar una implementación mantenida, versiones soportadas y políticas de claves, copias y recuperación. La referencia inicial a `EncryptedSharedPreferences` está deprecada; el reemplazo y su verificación siguen pendientes. Los criterios se detallan en [autenticación](03-autenticacion.md), sección 4.
+- **Sesión comprometida:** un bearer token válido robado puede utilizarse mientras siga vigente. Queda pendiente definir duración, revocación, MFA y reautenticación para operaciones sensibles; Keychain y PKCE no eliminan por sí solos ese riesgo.
 - **Acceso privilegiado:** proteger las escrituras de la aplicación no protege automáticamente frente a un administrador comprometido. Faltan separación de permisos, controles sobre la operación y protección independiente de evidencias y respaldos.
-- **Consentimiento de una operación:** una identidad técnica válida no demuestra por sí sola la intención del titular. La política de confirmación de transferencias y reversiones debe revisarse con Diego.
+- **Consentimiento de una operación:** una identidad técnica válida no demuestra por sí sola la intención del titular. Queda pendiente definir la política de confirmación de transferencias y reversiones.
 - **Configuración real:** faltan proveedor, despliegue, límites, timeouts, esquema de auditoría y objetivos de recuperación. No se asigna riesgo residual como aceptado mientras estas decisiones y sus verificaciones sigan abiertas.
 
-## 7. Cómo mantener el análisis
+## 7. Mantenimiento del análisis
 
-Antes de implementar cada flujo, revisar sus amenazas y acordar los controles pendientes. Cada ID debe quedar vinculado al cambio que implementa el control y a su evidencia de prueba. Registrar responsable, fecha, resultado y riesgo residual; cerrar o aceptar un riesgo requiere una decisión explícita del equipo.
+Antes de implementar cada flujo deben revisarse sus amenazas y definirse los controles pendientes. Cada ID debe vincularse al cambio que implementa el control y a su evidencia de prueba. El registro debe incluir responsable, fecha, resultado y riesgo residual. El cierre o la aceptación de un riesgo requiere una decisión explícita del equipo.
 
-Actualizar el análisis al elegir stack y proveedor, incorporar endpoints o roles, cambiar almacenamiento o despliegue, integrar un core externo o descubrir un fallo. Este registro es la primera revisión del diseño actual, no una certificación de seguridad. [1]
+El análisis debe actualizarse al elegir stack y proveedor, incorporar endpoints o roles, cambiar almacenamiento o despliegue, integrar un core externo o descubrir un fallo. [1]
 
 ## Referencias
 
