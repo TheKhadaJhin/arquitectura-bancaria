@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1620" viewBox="0 0 1920 1620" role="img" aria-labelledby="title desc">
+<title id="title">Arquitectura propuesta para la app bancaria</title>
+<desc id="desc">Identidad a la izquierda; app y gateway arriba; backend modular en el centro; persistencia e integración externa como ramas inferiores. Contornos punteados, fondo oscuro y notas técnicas junto a los componentes.</desc>
+<rect width="1920" height="1620" fill="#101318"/>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 1 L9 5 L0 9 Z" fill="#979b9f"/></marker></defs>
+<text x="960" y="70" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="38" font-weight="600" text-anchor="middle">ARQUITECTURA PROPUESTA · APP BANCARIA</text>
+<text x="1850" y="111" fill="#d3d5d7" font-family="DejaVu Sans, sans-serif" font-size="18" font-weight="400" text-anchor="end">Diseño para revisión con el equipo</text>
+<rect x="690" y="150" width="1160" height="210" rx="6" fill="#101318" stroke="#85898e" stroke-width="1.5" stroke-dasharray="3 5"/>
+<text x="706" y="181" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="500" text-anchor="start">1. CAPA CLIENTE / DISPOSITIVO</text>
+<rect x="730" y="217" width="410" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="935.0" y="266.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="26" font-weight="400" text-anchor="middle">App móvil (iOS / Android)</text>
+<rect x="1190" y="207" width="630" height="124" rx="6" fill="#24282c" stroke="#24282c" stroke-width="1.5"/>
+<text x="1206" y="235" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• Certificate Pinning + Device Attestation</text>
+<text x="1228" y="265" fill="#d3d5d7" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">Play Integrity / App Attest</text>
+<text x="1206" y="307" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• X-Idempotency-Key · Biometría / Step-up</text>
+<rect x="690" y="485" width="1160" height="220" rx="6" fill="#101318" stroke="#85898e" stroke-width="1.5" stroke-dasharray="3 5"/>
+<text x="706" y="516" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="500" text-anchor="start">2. CAPA DE BORDE / GATEWAY Y SEGURIDAD</text>
+<rect x="730" y="552" width="410" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="935.0" y="601.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="28" font-weight="400" text-anchor="middle">API Gateway / WAF</text>
+<rect x="1180" y="540" width="640" height="144" rx="6" fill="#24282c" stroke="#24282c" stroke-width="1.5"/>
+<text x="1196" y="568" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• X-Correlation-ID · trazabilidad</text>
+<text x="1196" y="600" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• Rate limiting</text>
+<text x="1196" y="632" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• CORS / IP allowlist según canal</text>
+<text x="1196" y="664" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• Validación JWT / Access Token</text>
+<rect x="65" y="510" width="390" height="215" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="260" y="551" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="400" text-anchor="middle">PROVEEDOR DE</text>
+<text x="260" y="583" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="400" text-anchor="middle">IDENTIDAD (IdP)</text>
+<text x="88" y="631" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">• Auth0 / Keycloak / Cognito</text>
+<text x="88" y="668" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• Emisión de tokens</text>
+<text x="260" y="701" fill="#d3d5d7" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="400" text-anchor="middle">Proveedor por definir</text>
+<rect x="480" y="825" width="1085" height="255" rx="6" fill="#101318" stroke="#85898e" stroke-width="1.5" stroke-dasharray="3 5"/>
+<text x="496" y="856" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="25" font-weight="500" text-anchor="start">3. CAPA DE DOMINIO / BACKEND MODULAR</text>
+<rect x="510" y="890" width="320" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="670.0" y="924.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">Risk &amp; Anti-Fraud</text>
+<text x="670.0" y="954.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">Engine</text>
+<rect x="850" y="890" width="315" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="1007.5" y="924.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="400" text-anchor="middle">Módulo de Usuarios</text>
+<text x="1007.5" y="954.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="400" text-anchor="middle">&amp; Cuentas</text>
+<rect x="1185" y="890" width="350" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="1360.0" y="924.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="400" text-anchor="middle">Módulo Transaccional /</text>
+<text x="1360.0" y="954.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="400" text-anchor="middle">Movimientos</text>
+<text x="515" y="1008" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">• Riesgo en tiempo real</text>
+<text x="537" y="1036" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">Antes de autorizar</text>
+<text x="855" y="1008" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">• Ownership Validation</text>
+<text x="877" y="1036" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">Permisos por cuenta</text>
+<text x="1190" y="1008" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">• Máquina de estados</text>
+<text x="1212" y="1036" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">Idempotencia · concurrencia</text>
+<text x="1022" y="1065" fill="#d3d5d7" font-family="DejaVu Sans, sans-serif" font-size="18" font-weight="400" text-anchor="middle">Validación en servidor de JWT, attestation y step-up</text>
+<rect x="60" y="1215" width="770" height="300" rx="6" fill="#101318" stroke="#85898e" stroke-width="1.5" stroke-dasharray="3 5"/>
+<text x="76" y="1246" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="500" text-anchor="start">4. CAPA DE PERSISTENCIA Y AUDITORÍA</text>
+<rect x="85" y="1276" width="370" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="270.0" y="1325.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="28" font-weight="400" text-anchor="middle">PostgreSQL</text>
+<rect x="505" y="1276" width="280" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="645.0" y="1310.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">Secrets Manager</text>
+<text x="645.0" y="1340.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">/ KMS</text>
+<path d="M455 1317 L505 1317" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<text x="87" y="1399" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">• Ledger inmutable (Double-Entry)</text>
+<text x="87" y="1435" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">• Eventos append-only · outbox</text>
+<text x="87" y="1471" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">• PII Data Vault cifrado y aislado</text>
+<text x="507" y="1399" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">Claves y credenciales</text>
+<text x="507" y="1429" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">con permisos separados</text>
+<text x="507" y="1471" fill="#d3d5d7" font-family="DejaVu Sans, sans-serif" font-size="19" font-weight="400" text-anchor="start">Vault / KMS por definir</text>
+<rect x="930" y="1215" width="930" height="300" rx="6" fill="#101318" stroke="#85898e" stroke-width="1.5" stroke-dasharray="3 5"/>
+<text x="946" y="1246" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="23" font-weight="500" text-anchor="start">5. CAPA DE INTEGRACIÓN EXTERNA Y RESILIENCIA</text>
+<rect x="955" y="1276" width="262" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="1086.0" y="1310.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">Event Bus /</text>
+<text x="1086.0" y="1340.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">Message Broker</text>
+<rect x="1240" y="1276" width="278" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="1379.0" y="1310.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">Circuit Breakers</text>
+<text x="1379.0" y="1340.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">&amp; Timeouts</text>
+<rect x="1570" y="1276" width="252" height="82" rx="8" fill="#202524" stroke="#979b9f" stroke-width="1.5"/>
+<text x="1696.0" y="1310.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">Core bancario</text>
+<text x="1696.0" y="1340.0" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="400" text-anchor="middle">externo</text>
+<path d="M1518 1317 L1570 1317" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<text x="957" y="1399" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">• Apache Kafka</text>
+<text x="979" y="1432" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="start">Outbox Pattern</text>
+<text x="979" y="1464" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="18" font-weight="400" text-anchor="start">Consumidores idempotentes</text>
+<text x="979" y="1494" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="18" font-weight="400" text-anchor="start">Publicación tras el commit</text>
+<text x="1242" y="1399" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="19" font-weight="400" text-anchor="start">• Degradación controlada</text>
+<text x="1264" y="1432" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="19" font-weight="400" text-anchor="start">Consulta / conciliación</text>
+<text x="1572" y="1399" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">Vía adaptador</text>
+<text x="1572" y="1432" fill="#d3d5d7" font-family="DejaVu Sans, sans-serif" font-size="19" font-weight="400" text-anchor="start">Contrato por definir</text>
+<text x="1242" y="1488" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">Saga: pasos distribuidos, si aplica</text>
+<path d="M400 510 L730 258" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<g transform="translate(525 360) rotate(-37)">
+<text x="0" y="-9" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="middle">OAuth 2.0 / OIDC</text>
+<text x="0" y="18" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="middle">Authorization Code + PKCE</text>
+</g>
+<path d="M455 593 L730 593" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)" stroke-dasharray="5 5"/>
+<text x="592" y="570" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="middle">JWKS en caché</text>
+<path d="M935 299 L935 485" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="970" y="408" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">API REST · HTTPS / TLS 1.3</text>
+<text x="970" y="436" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="400" text-anchor="start">Access token</text>
+<path d="M935 634 L935 825" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="968" y="760" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="21" font-weight="400" text-anchor="start">Solicitud a la API</text>
+<path d="M480 965 C365 1012, 350 1105, 320 1215" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1565 965 C1690 1010, 1700 1110, 1740 1215" fill="none" stroke="#979b9f" stroke-width="2.3" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="960" y="1573" fill="#efefef" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="400" text-anchor="middle">Transversal: trazas · logs · métricas · auditoría · revisión de amenazas con STRIDE</text>
+</svg>
