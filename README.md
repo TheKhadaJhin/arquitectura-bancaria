@@ -1,40 +1,42 @@
 # Propuesta de arquitectura bancaria
 
-Preparé esta base para revisar con Diego y el equipo la arquitectura, el registro de movimientos, la autenticación y los contratos iniciales de la aplicación. La idea es dejar explícitos los supuestos y ajustar las decisiones antes de implementar.
+En este repositorio presento la propuesta de arquitectura para la aplicación bancaria, junto con el modelo de datos, los flujos de autenticación, los contratos de API y el análisis de amenazas. Cada documento detalla las decisiones de diseño, su alcance y los puntos pendientes antes de implementar.
 
-**Estado:** cinco documentos preparados para revisión. La implementación y las pruebas están pendientes; los controles de seguridad descritos todavía deben implementarse y verificarse.
+**Estado:** documentación de diseño. La implementación, el scaffolding, la configuración de CI y las protecciones de ramas están pendientes. Las ampliaciones de la arquitectura general todavía deben incorporarse al detalle de las secciones 02–06.
 
 ## Documentación
 
 | Documento | Contenido |
 |---|---|
-| [Arquitectura general](01-arquitectura.md) | App móvil, proveedor de identidad, API Gateway, backend modular, PostgreSQL y límites de confianza. |
-| [Modelo relacional](02-modelo-relacional.md) | Entidades, claves, ledger de partida doble, atomicidad, idempotencia, concurrencia y reversas. |
-| [Autenticación](03-autenticacion.md) | OAuth 2.0 / OIDC con PKCE, access y refresh tokens, cierre de sesión y almacenamiento en Keychain de iOS. |
-| [Contratos de API](04-contratos-api.md) | Operaciones de autenticación con el proveedor de identidad y contrato de consulta de saldo, con respuestas y errores. |
-| [Modelo de amenazas](05-threat-model.md) | Análisis STRIDE, límites de confianza, amenazas, controles propuestos y verificaciones previstas. |
-
-El orden de la tabla sirve como recorrido de lectura. El análisis de amenazas acompaña las decisiones de todos los documentos y se actualiza cuando cambia el diseño.
+| [Arquitectura general](01-arquitectura.md) | App móvil, identidad, API Gateway/WAF, backend modular, motor de riesgo, persistencia e integración con sistemas externos. |
+| [Modelo relacional](02-modelo-relacional.md) | Entidades, claves, ledger de partida doble, atomicidad, idempotencia, concurrencia y reversiones. |
+| [Autenticación](03-autenticacion.md) | OAuth 2.0 / OIDC con PKCE, manejo de tokens, almacenamiento seguro y cierre de sesión. |
+| [Contratos de API](04-contratos-api.md) | Intercambios de autenticación y consulta de saldo, con solicitudes, respuestas y errores. |
+| [Modelo de amenazas](05-threat-model.md) | Análisis STRIDE, límites de confianza, controles propuestos y verificaciones previstas. |
+| [Stack y scaffolding](06-stack-y-scaffolding.md) | Tecnologías candidatas, estructura de los proyectos y configuración inicial de desarrollo. |
 
 ## Alcance inicial
 
-La propuesta cubre autenticación móvil, consulta de saldo contabilizado y el diseño de transferencias internas entre dos cuentas distintas y activas, en ARS, sin comisiones, retenciones ni descubierto. El contrato de la API de transferencias queda pendiente. Los ejemplos utilizan datos ficticios.
+La aplicación está prevista para **Android e iOS**. El alcance inicial incluye autenticación móvil, consulta de saldo contable y diseño de transferencias internas entre cuentas distintas y activas, en ARS, sin comisiones, retenciones ni descubierto. El contrato de transferencias queda pendiente. Los ejemplos utilizan datos ficticios.
 
-Por ahora, PostgreSQL se considera la fuente de verdad de los movimientos. Tenemos que confirmar si corresponde al proyecto o si las operaciones se ejecutan en un core bancario externo: esa definición puede cambiar la confirmación y la conciliación de las transferencias.
+El flujo interno supone que PostgreSQL registra ambos lados de la transferencia. Queda pendiente definir su relación con el core bancario y qué sistema será la fuente oficial de los movimientos. Esa decisión determina cómo se confirman y concilian las operaciones externas.
 
 ## Decisiones propuestas
 
-- Mantener un backend modular detrás del API Gateway. El backend valida identidad, permisos sobre cada cuenta y reglas de negocio.
-- Delegar la autenticación en un proveedor de identidad mediante Authorization Code con PKCE; mantener el access token en memoria y el refresh token en Keychain.
-- Registrar las operaciones en `transactions` y sus asientos en `ledger_entries`, con partida doble y saldos reconstruibles desde el historial confirmado. Las correcciones generan operaciones compensatorias sin modificar los asientos originales.
-- Confirmar cada operación y sus asientos en una transacción SQL. Usar idempotencia por usuario, comparación de la solicitud y un protocolo común de bloqueo y comprobación de fondos.
-- Mantener las amenazas STRIDE vinculadas con controles y evidencias de verificación. Las amenazas identificadas siguen abiertas.
-
-Las restricciones, los casos de error y las verificaciones previstas se detallan en cada documento.
+- **Backend modular:** concentrar las reglas de negocio en una aplicación detrás del API Gateway. Validar identidad, permisos sobre cada cuenta y condiciones de la operación.
+- **Autenticación:** utilizar un proveedor de identidad con Authorization Code + PKCE. Mantener el access token en memoria y proteger el refresh token con Keychain en iOS y una solución apoyada en Keystore para Android.
+- **Registro contable:** utilizar un ledger de partida doble, con saldos reconstruibles y asientos confirmados que no se modifican. Las correcciones se registran mediante operaciones compensatorias.
+- **Transferencias internas:** confirmar la operación y sus asientos en una misma transacción SQL, con idempotencia, control de concurrencia y comprobación de fondos.
+- **Historial y eventos:** incorporar eventos append-only y una outbox en la transacción local. Publicar en Kafka después del commit y procesar los eventos con consumidores idempotentes. Saga queda sujeta a la necesidad de coordinar pasos distribuidos.
+- **Protección y riesgo:** evaluar el riesgo antes de autorizar movimientos e incorporar los controles de dispositivo y autenticación adicional definidos en la arquitectura. Separar el acceso a datos personales sensibles mediante un Data Vault cifrado y permisos específicos para las claves.
+- **Seguridad:** mantener el análisis STRIDE vinculado a los flujos, controles y pruebas. Los controles descritos requieren implementación y verificación.
+- **Stack:** evaluar Python + FastAPI para backend y React Native + TypeScript para mobile. La selección final queda pendiente.
 
 ## Próximos pasos
 
-1. Acordar con Diego el stack del backend y de la app móvil.
-2. Preparar la estructura de los repositorios, los linters y las protecciones de ramas.
-3. Resolver con el equipo los supuestos pendientes: core bancario, proveedor de identidad, políticas de sesión, asientos de apertura y cuentas internas del ledger.
-4. Asignar responsables a las amenazas y llevar sus controles y pruebas a la implementación de cada flujo.
+1. Queda pendiente acordar el stack, la organización de los repositorios y la solución de almacenamiento seguro para Android.
+2. Completar las definiciones de core bancario, proveedor de identidad, políticas de sesión, cuentas internas y asientos de apertura del ledger.
+3. Incorporar las ampliaciones de la arquitectura al modelo de datos, la autenticación, los contratos, el análisis STRIDE y el stack.
+4. Inicializar los proyectos con dependencias fijadas, configuración de ejemplo, linters y verificaciones en CI.
+5. Comprobar instalación, arranque o compilación y configurar las protecciones de ramas.
+6. Asignar responsables a los controles de seguridad y documentar sus pruebas por flujo.
