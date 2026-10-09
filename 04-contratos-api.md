@@ -1,8 +1,8 @@
-# Contratos de API: autenticación y saldo
+# 04 · Contratos de API: autenticación y saldo
 
-Propongo estos contratos para acordar qué envía la app, quién lo procesa y qué respuesta recibe. Complementan el flujo de [autenticación y sesión](03-autenticacion.md).
+Presento un borrador de los contratos de autenticación y consulta de saldo. Define solicitudes, responsables, respuestas y errores, y complementa el flujo de [autenticación y sesión](03-autenticacion.md).
 
-**Estado:** borrador para revisar con Diego y el equipo; configuración, implementación y pruebas pendientes. Los ejemplos contienen datos ficticios.
+**Estado:** borrador de contratos; configuración, implementación y pruebas pendientes. Los ejemplos contienen datos ficticios.
 
 **Alcance:** inicio de sesión, canje y renovación de tokens, revocación del refresh token y consulta del saldo contable de una cuenta. Las transferencias se documentarán aparte.
 
@@ -13,10 +13,10 @@ Propongo estos contratos para acordar qué envía la app, quién lo procesa y qu
 | Iniciar login | `GET authorization_endpoint`, abierto en el navegador del sistema. | Proveedor de identidad. |
 | Canjear código por tokens | `POST token_endpoint`. | Proveedor de identidad. |
 | Renovar tokens | `POST token_endpoint`, con otro `grant_type`. | Proveedor de identidad. |
-| Revocar refresh token | `POST revocation_endpoint`. | Proveedor de identidad. |
+| Revocar refresh token | `POST revocation_endpoint`. | Pr6oveedor de identidad. |
 | Consultar saldo | `GET /v1/accounts/{account_id}/balance`. | Nuestro backend, a través del API Gateway. |
 
-Los nombres de endpoints OIDC representan URL completas de la configuración confiable del proveedor, verificando su emisor. Las URL reales, el cliente registrado y la redirección se acordarán al elegirlo. La revocación deberá estar soportada y configurada. [1][5]
+Los nombres de endpoints OIDC representan URL completas de la configuración confiable del proveedor, verificando su emisor. Las URL reales, el cliente registrado y la redirección quedan pendientes de la selección del proveedor. La revocación deberá estar soportada y configurada. [1][5]
 
 Los intercambios de red requieren TLS con verificación del extremo remoto. Los límites y la protección del tramo gateway–backend se concretan en el modelo de amenazas.
 
@@ -36,7 +36,7 @@ La biblioteca OIDC construye el `GET` al `authorization_endpoint` con estos par�
 | `code_challenge` | Desafío derivado del verificador PKCE. |
 | `code_challenge_method` | `S256`. |
 
-La emisión de refresh tokens depende del proveedor. Si exige `offline_access`, se solicitará con el consentimiento correspondiente. La audiencia de nuestra API también debe quedar configurada. [2]
+La emisión de refresh tokens depende del proveedor. Si exige `offline_access`, se solicitará con el consentimiento correspondiente. La audiencia de la API también debe quedar configurada. [2]
 
 **Retorno exitoso:** redirección a la app con `code` y `state`. Un rechazo puede retornar `error=access_denied` y el `state` correspondiente. La biblioteca valida el retorno antes de continuar; los errores de redirección inválida no deben provocar un envío a una URI no confiable.
 
@@ -97,7 +97,7 @@ El logout local elimina las credenciales aunque falle la revocación remota. Inv
 | Entrada | Contrato |
 |---|---|
 | `account_id` | UUID obligatorio en la ruta. |
-| `Authorization` | `Bearer <access_token>` emitido para nuestra API. |
+| `Authorization` | `Bearer <access_token>` emitido para la API. |
 | `Accept` | `application/json`. |
 | Cuerpo y parámetros de consulta | Ninguno. |
 
@@ -141,7 +141,7 @@ La API usa decimales exactos internamente y texto para el importe en JSON. El cl
 
 ## 5. Errores y comportamiento del cliente
 
-Para los errores controlados de nuestra API propongo este cuerpo, compartido por gateway y backend. La app decide por el estado HTTP y `code`; `message` es informativo.
+La propuesta utiliza un formato común para los errores controlados del gateway y el backend. La app decide por el estado HTTP y `code`; `message` es informativo.
 
 **Ejemplo de `404`:**
 
@@ -171,18 +171,18 @@ Respuestas de saldo y errores: `Cache-Control: no-store`. La infraestructura con
 
 ## 6. Pendientes y verificaciones
 
-| Pendiente | Qué debemos acordar |
+| Área | Definición pendiente |
 |---|---|
 | Proveedor OIDC | URL reales, cliente, redirección, audiencia, scopes, emisión y duración de tokens, rotación y revocación. |
 | Acceso a cuentas | Alta del usuario local y política de consulta de cuentas bloqueadas o cerradas. |
 | Contrato final | Nombres de campos y códigos, límites de solicitudes, tiempos de espera y reintentos acotados. |
 | Origen del saldo | Registro local o core externo; completar apertura y contrapartidas antes de usar datos reales. |
 
-**Verificaciones previstas:** canje y renovación válidos; rechazo de credenciales inválidas; saldo con formato exacto; cuenta ajena e inexistente con la misma respuesta; indisponibilidad sin saldo inventado; límites de reintento y correlación de errores. No se ejecutaron pruebas ni se configuraron servicios.
+**Verificaciones previstas:** canje y renovación válidos; rechazo de credenciales inválidas; saldo con formato exacto; cuenta ajena e inexistente con la misma respuesta; indisponibilidad sin saldo inventado; límites de reintento y correlación de errores. La ejecución de pruebas y la configuración de servicios están pendientes.
 
 ## Relación con el modelo de amenazas
 
-El [análisis STRIDE](05-threat-model.md) traza TM-01–TM-04 y TM-09–TM-12 hacia estos contratos: identidad, acceso por cuenta, errores, límites y validación de entradas. Un `429` documentado no implementa el límite: faltan su configuración y pruebas. La validación de un UUID se complementa con consultas parametrizadas y autorización en el backend.
+El [análisis STRIDE](05-threat-model.md) traza TM-01–TM-04 y TM-09–TM-12 hacia estos contratos: identidad, acceso por cuenta, errores, límites y validación de entradas. El límite de solicitudes asociado a `429` requiere configuración y pruebas. La validación de un UUID se complementa con consultas parametrizadas y autorización en el backend.
 
 ## Referencias
 
