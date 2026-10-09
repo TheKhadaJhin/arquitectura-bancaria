@@ -32,11 +32,3 @@ El flujo interno supone que PostgreSQL registra ambos lados de la transferencia.
 - **Seguridad:** mantener el análisis STRIDE vinculado a los flujos, controles y pruebas. Los controles descritos requieren implementación y verificación.
 - **Stack:** evaluar Python + FastAPI para backend y React Native + TypeScript para mobile. La selección final queda pendiente.
 
-## Próximos pasos
-
-1. Queda pendiente acordar el stack, la organización de los repositorios y la solución de almacenamiento seguro para Android.
-2. Completar las definiciones de core bancario, proveedor de identidad, políticas de sesión, cuentas internas y asientos de apertura del ledger.
-3. Incorporar las ampliaciones de la arquitectura al modelo de datos, la autenticación, los contratos, el análisis STRIDE y el stack.
-4. Inicializar los proyectos con dependencias fijadas, configuración de ejemplo, linters y verificaciones en CI.
-5. Comprobar instalación, arranque o compilación y configurar las protecciones de ramas.
-6. Asignar responsables a los controles de seguridad y documentar sus pruebas por flujo.
