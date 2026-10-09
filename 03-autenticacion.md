@@ -1,10 +1,10 @@
-# Autenticación y sesión
+# 03 · Autenticación y sesión
 
 Propongo delegar el inicio de sesión en un **proveedor de identidad compatible con OpenID Connect (OIDC)**. El backend valida el acceso a la API y autoriza cada operación sobre cuentas y recursos.
 
 **Estado:** diseño propuesto; proveedor, configuración, implementación y pruebas pendientes.
 
-**Alcance:** app móvil nativa, API Gateway y backend del diagrama general.
+**Alcance:** app móvil para Android e iOS, API Gateway y backend del diagrama general. El framework móvil sigue pendiente. Los flujos de OAuth/OIDC son comunes; la integración con el sistema y el almacenamiento se verifican por plataforma.
 
 ## 1. Responsabilidades y tokens
 
@@ -17,15 +17,15 @@ Propongo delegar el inicio de sesión en un **proveedor de identidad compatible 
 
 | Token | Para qué se utiliza | Manejo en la app |
 |---|---|---|
-| **Access token** | Acceder a nuestra API con `Authorization: Bearer <access_token>`. | En memoria; usar `expires_in` para gestionar su vencimiento. |
-| **Refresh token** | Obtener nuevos tokens en el proveedor. | En Keychain; nunca enviarlo a la API de negocio. |
-| **ID token** | Comunicar a la app el resultado de la autenticación OIDC. | Validarlo con la biblioteca OIDC; no usarlo para acceder a nuestra API. |
+| **Access token** | Acceder a la API con `Authorization: Bearer <access_token>`. | En memoria; usar `expires_in` para gestionar su vencimiento. |
+| **Refresh token** | Obtener nuevos tokens en el proveedor. | iOS: Keychain. Android: almacenamiento cifrado por definir, con claves protegidas mediante Keystore como criterio propuesto. Nunca enviarlo a la API de negocio. |
+| **ID token** | Comunicar a la app el resultado de la autenticación OIDC. | Validarlo con la biblioteca OIDC; no usarlo para acceder a la API. |
 
-Propongo access tokens JWT firmados, con perfil por acordar. La app los trata como valores opacos; el backend los valida. El refresh token no necesita ser JWT. [3][4]
+La propuesta utiliza access tokens JWT firmados; queda pendiente definir su perfil. La app los trata como valores opacos; el backend los valida. El refresh token no necesita ser JWT. [3][4]
 
 ## 2. Inicio de sesión
 
-El flujo propuesto es **Authorization Code con PKCE S256**, mediante el navegador o la sesión de autenticación del sistema y una biblioteca OIDC mantenida. La app es un cliente público: no depende de un `client_secret` confidencial. Las credenciales se introducen en el proveedor. [1][2]
+El flujo propuesto es **Authorization Code con PKCE S256**, mediante el navegador o la sesión de autenticación del sistema y una biblioteca OIDC mantenida. La app se registra como cliente público y no utiliza un `client_secret` como credencial confidencial. Las credenciales se introducen en el proveedor. [1][2]
 
 ```mermaid
 sequenceDiagram
@@ -66,12 +66,14 @@ En **cada petición protegida**, el backend aplica estas comprobaciones mediante
 | Control | Regla |
 |---|---|
 | Firma y algoritmo | Clave confiable y algoritmo permitido explícitamente; rechazar `none`. |
-| Emisor y audiencia | `iss` coincide con el proveedor configurado y `aud` incluye nuestra API. |
-| Vigencia y perfil | Verificar `exp`, `nbf` cuando exista, tolerancia de reloj acotada y claims/tipo exigidos. Si adoptamos RFC 9068, aplicar el perfil completo, incluido `typ`. |
+| Emisor y audiencia | `iss` coincide con el proveedor configurado y `aud` incluye la API. |
+| Vigencia y perfil | Verificar `exp`, `nbf` cuando exista, tolerancia de reloj acotada y claims/tipo exigidos. Si se adopta RFC 9068, aplicar el perfil completo, incluido `typ`. |
 | Usuario local | Resolver `(iss, sub)` contra `users.auth_issuer` y `users.auth_subject`; comprobar que esté activo. |
 | Autorización | Verificar permiso funcional y acceso a la cuenta solicitada. |
 
 La identidad se obtiene del token validado. Un `user_id` enviado por el cliente no determina quién opera. Las claves públicas se obtienen de la configuración confiable del emisor, con caché y actualización para la rotación; no de URLs arbitrarias incluidas en el token. Si no se puede validar, se rechaza. [5]
+
+El backend mantiene estas validaciones aunque la petición llegue por el gateway. Los encabezados de identidad aportados por el cliente no sustituyen al token validado; el canal interno y sus accesos se protegerán según el modelo de amenazas.
 
 **Ejemplo: consulta de saldo.**
 
@@ -101,13 +103,13 @@ sequenceDiagram
     G-->>A: Respuesta
 ```
 
-Criterio propuesto: `401` para autenticación inválida; `403` para falta de permiso funcional; `404` para cuenta inexistente o no accesible. Los cuerpos de error se definirán en el contrato de API.
+Criterio propuesto: `401` para autenticación inválida; `403` para falta de permiso funcional; `404` para cuenta inexistente o no accesible. Los cuerpos de error se detallan en [contratos de API](04-contratos-api.md).
 
 ## 4. Renovación, almacenamiento y cierre
 
 ### Renovación
 
-Propongo refresh tokens con **rotación y detección de reutilización** en el proveedor. [6]
+La renovación propuesta utiliza refresh tokens con **rotación y detección de reutilización** en el proveedor. [6]
 
 1. Coordinar una sola renovación por sesión, aunque varias peticiones la necesiten.
 2. Solicitar nuevos tokens, validar la respuesta y reemplazar de forma coordinada el refresh token antes de permitir otra renovación.
@@ -124,21 +126,30 @@ Clase candidata: `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`. Sus elemento
 
 Si Keychain no está accesible, se maneja esa condición sin copiar credenciales a preferencias comunes. Contraseñas, códigos de autorización y tokens completos quedan fuera de logs y analítica.
 
+### Almacenamiento en Android — decisión pendiente
+
+`EncryptedSharedPreferences` está deprecado; queda pendiente seleccionar su reemplazo. [10]
+
+El criterio propuesto mantiene el access token en memoria y persiste el refresh token cifrado mediante una integración mantenida, con claves protegidas por Android Keystore. Keystore gestiona claves criptográficas; el token cifrado requiere almacenamiento separado. No guardar tokens en texto claro en preferencias comunes ni AsyncStorage. [11][12]
+
+Definir versiones mínimas, protección de claves, acceso con el dispositivo bloqueado y exclusiones de copia/restauración. Ante pérdida o invalidación permanente de la clave, limpiar la sesión local y solicitar login; ante inaccesibilidad temporal, manejar esa condición sin reducir la protección. Verificar también el borrado de las credenciales al cerrar sesión.
+
 ### Cierre de sesión
 
 Detener renovaciones, impedir que una respuesta tardía restaure la sesión, solicitar la revocación del refresh token y borrar credenciales locales incluso si esa solicitud falla.
 
 El cierre local no confirma una revocación remota fallida. Un access token JWT puede seguir válido hasta vencer sin invalidación adicional. La sesión del navegador en el proveedor tiene un cierre separado, a integrar si se requiere. [8][9]
 
-## 5. Pendientes para acordar con el equipo
+## 5. Definiciones pendientes
 
-| Decisión | Qué falta definir |
+| Área | Definición pendiente |
 |---|---|
-| Integración OIDC | Proveedor, biblioteca, clientes registrados, redirecciones, audiencias, permisos y perfil del access token. |
+| Integración OIDC | Proveedor, bibliotecas, clientes y redirecciones registrados para cada plataforma, audiencias, permisos y perfil del access token. |
 | Identidad local | Alta y vinculación estable del usuario con `(iss, sub)`. |
 | Política de sesión | Duración, inactividad, MFA y reautenticación para operaciones sensibles. |
 | Renovación y cierre | Recuperación de respuestas perdidas, invalidación inmediata y alcance del cierre en el proveedor. |
-| Dispositivo | Política de Keychain, segundo plano y necesidad de vincular tokens criptográficamente al cliente o dispositivo. |
+| Almacenamiento | Política de Keychain en iOS; integración de cifrado y Keystore en Android, versiones soportadas, copias y recuperación ante pérdida de claves. |
+| Dispositivo | Acceso en segundo plano y necesidad de vincular tokens criptográficamente al cliente o dispositivo. |
 
 ## 6. Verificaciones previstas
 
@@ -151,8 +162,14 @@ El cierre local no confirma una revocación remota fallida. Un access token JWT 
 | Respuesta de renovación perdida | Recuperación acordada, sin reintentos ciegos. |
 | Logout durante una renovación | La respuesta tardía no restaura la sesión. |
 | Keychain no accesible | No se reduce la protección del almacenamiento. |
+| Android: clave invalidada o ausente tras restauración | No se recupera una sesión con credenciales sin protección; se limpia la sesión local y se solicita login. |
+| Android: almacenamiento, copias, logs y cierre de sesión | No quedan tokens en texto claro ni credenciales locales utilizables después del cierre. |
 
-Estas verificaciones están previstas; aún no se ejecutaron.
+Estado de las verificaciones: pendientes de ejecución. Los casos comunes de login, retorno a la app, renovación y logout deben comprobarse en Android e iOS.
+
+## Relación con el modelo de amenazas
+
+El [análisis STRIDE](05-threat-model.md) relaciona este flujo con TM-01–TM-04 y TM-11: suplantación, alteración del login, robo de tokens y elusión de permisos. Proveedor, duración, revocación y políticas de autenticación adicional deben concretarse antes de dar esos controles por verificados.
 
 ## Referencias
 
@@ -165,3 +182,6 @@ Estas verificaciones están previstas; aún no se ejecutaron.
 7. [Apple: kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly](https://developer.apple.com/documentation/security/ksecattraccessiblewhenpasscodesetthisdeviceonly).
 8. [RFC 7009: revocación de tokens](https://datatracker.ietf.org/doc/html/rfc7009).
 9. [OpenID Connect: RP-Initiated Logout](https://openid.net/specs/openid-connect-rpinitiated-1_0.html).
+10. [Android: EncryptedSharedPreferences](https://developer.android.com/reference/androidx/security/crypto/EncryptedSharedPreferences).
+11. [Android Keystore](https://developer.android.com/privacy-and-security/keystore).
+12. [React Native: seguridad y almacenamiento](https://reactnative.dev/docs/security).
