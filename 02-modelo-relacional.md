@@ -1,12 +1,12 @@
-# Modelo lógico de transferencias
+# 02 · Modelo lógico de transferencias
 
-Propongo un **ledger de partida doble en PostgreSQL**: cada operación confirmada agrupa movimientos contables balanceados y conserva su historial. Esta es la base para revisar con Diego y el equipo.
+Propongo un **ledger de partida doble en PostgreSQL**: cada operación confirmada agrupa movimientos contables balanceados y conserva su historial. El modelo define las entidades, restricciones y condiciones de confirmación de una transferencia interna.
 
 **Estado:** diseño propuesto; implementación y pruebas pendientes.
 
 **Alcance:** transferencias internas en ARS entre dos cuentas de clientes distintas y activas, sin comisiones, retenciones ni descubierto.
 
-**Supuesto:** PostgreSQL es el registro autoritativo del dinero. Si un core externo ejecuta las operaciones, debemos revisar la confirmación, los estados y la conciliación; una transacción SQL local no garantiza el resultado externo.
+**Supuesto:** PostgreSQL es el registro autoritativo del dinero. Si las operaciones se ejecutan en un core externo, quedan pendientes las reglas de confirmación, estados y conciliación. Una transacción SQL local no garantiza el resultado externo.
 
 ## 1. Entidades y claves
 
@@ -62,7 +62,7 @@ erDiagram
     }
 ```
 
-**Lectura:** `PK` es clave primaria y `FK`, foránea. `||` significa exactamente uno; `o{`, cero o muchos. Las líneas discontinuas indican relaciones no identificadoras: las FK mostradas no forman parte de la PK. Una cuenta puede no tener movimientos; una operación rechazada no tiene entradas.
+**Notación del diagrama:** `PK` es clave primaria y `FK`, foránea. `||` significa exactamente uno; `o{`, cero o muchos. Las líneas discontinuas indican relaciones no identificadoras: las FK mostradas no forman parte de la PK. Una cuenta puede no tener movimientos; una operación rechazada no tiene entradas.
 
 **Tipos:** identificadores `UUID`; fechas `TIMESTAMPTZ`; `amount NUMERIC(20,2)`; moneda `VARCHAR(3)`; `auth_subject VARCHAR(255)`; `idempotency_key VARCHAR(128)`. `string` representa texto en el diagrama.
 
@@ -72,7 +72,7 @@ Los campos son obligatorios salvo `posted_at`, `rejection_code` y `reversal_of_i
 
 Por operación y moneda, **total de débitos = total de créditos**. Para la transferencia simple se exigen dos entradas: una en el origen y otra en el destino, por el importe autorizado.
 
-Vemos las cuentas de clientes desde la entidad: sus saldos son pasivos, porque representan dinero que esta les debe. En este modelo, `amount` negativo codifica un débito y positivo, un crédito. Para estas cuentas, el débito reduce el saldo y el crédito lo aumenta.
+Las cuentas de clientes se representan desde la perspectiva de la entidad: sus saldos son pasivos, porque corresponden a dinero que esta les debe. En este modelo, `amount` negativo codifica un débito y positivo, un crédito. Para estas cuentas, el débito reduce el saldo y el crédito lo aumenta.
 
 **Ejemplo: T1 transfiere ARS 10.000 de A a B.**
 
@@ -81,9 +81,9 @@ Vemos las cuentas de clientes desde la entidad: sus saldos son pasivos, porque r
 | T1 | 1 | A | ARS | −10.000,00 | Débito al origen. |
 | T1 | 2 | B | ARS | +10.000,00 | Crédito al destino. |
 
-T1, A y B abrevian UUID. La suma es cero; la columna de interpretación explica el signo y no se almacena.
+T1, A y B representan UUID abreviados. La suma de los importes es cero. La columna «Interpretación» describe el signo y no forma parte del esquema.
 
-El saldo de una cuenta de cliente es la suma de sus entradas vinculadas a operaciones `POSTED`, incluida su apertura. `accounts` no almacena un saldo separado. Si incorporamos cuentas de otra naturaleza, deberemos adaptar el cálculo: por ejemplo, un débito aumenta el saldo de un activo.
+El saldo de una cuenta de cliente es la suma de sus entradas vinculadas a operaciones `POSTED`, incluida su apertura. `accounts` no almacena un saldo separado. La incorporación de cuentas de otra naturaleza requiere adaptar el cálculo; por ejemplo, un débito aumenta el saldo de una cuenta de activo.
 
 **Límite del modelo:** falta definir las cuentas internas y las contrapartidas de apertura. El `user_id` obligatorio actual solo representa cuentas de clientes. Esta ampliación es necesaria para registrar fondos iniciales, depósitos o retiros.
 
@@ -113,7 +113,7 @@ Un fallo técnico antes del commit provoca `ROLLBACK` de todo el intento, inclui
 | `POSTED` | Operación confirmada con sus entradas completas. |
 | `REJECTED` | Rechazo de negocio registrado sin entradas. |
 
-La fila de `transactions` identifica la operación de negocio; la transacción SQL garantiza que sus escrituras se confirmen juntas. El procesamiento asíncrono queda fuera de este alcance.
+La fila de `transactions` identifica la operación de negocio; la transacción SQL garantiza que sus escrituras se confirmen juntas. Este documento detalla el flujo SQL interno. Queda pendiente incorporar el modelo de eventos y outbox previsto en [arquitectura](01-arquitectura.md).
 
 ### Idempotencia: evitar duplicados
 
@@ -129,7 +129,7 @@ La restricción `UNIQUE(initiated_by_user_id, idempotency_key)` resuelve la comp
 
 ### Concurrencia: proteger el saldo
 
-Para operaciones distintas propongo `READ COMMITTED` y bloqueo de todas las cuentas involucradas, siempre en el mismo orden. Después de adquirir los bloqueos, una sentencia nueva revalida su estado y consulta el saldo; los bloqueos se mantienen hasta finalizar la transacción.
+La estrategia propuesta para operaciones distintas utiliza `READ COMMITTED` y bloqueo de todas las cuentas involucradas en un orden común. Después de adquirir los bloqueos, una sentencia nueva revalida su estado y consulta el saldo; los bloqueos se mantienen hasta finalizar la transacción.
 
 Todos los procesos que contabilicen deben seguir este protocolo. Hay que restringir las escrituras directas que lo eludan: el bloqueo de una cuenta no impide por sí solo insertar entradas desde otro proceso.
 
@@ -148,7 +148,7 @@ Todos los procesos que contabilicen deben seguir este protocolo. Hay que restrin
 | Reversión completa única | Como máximo una reversión completa confirmada por original; autorización e índice condicional por concretar. |
 | Acceso a la base | Consultas parametrizadas y rol de ejecución sin privilegios administrativos; limitar escrituras financieras al circuito de contabilización. |
 
-El balance entre varias filas requiere una rutina de contabilización y/o validación diferida en la base; un `CHECK` ordinario no alcanza. Los mecanismos concretos y los permisos de escritura siguen pendientes de implementación.
+El balance entre varias filas requiere una rutina de contabilización, validación diferida en la base o ambas. Un `CHECK` ordinario no cubre esa restricción. Los mecanismos concretos y los permisos de escritura siguen pendientes de implementación.
 
 ## 5. Reconstrucción, auditoría y recuperación
 
@@ -158,11 +158,11 @@ El balance entre varias filas requiere una rutina de contabilización y/o valida
 - **Auditoría:** registrar identificador, fecha, actor, acción, recurso, resultado, `request_id` y operación cuando exista. Las confirmaciones deben quedar consistentes con el commit; los intentos fallidos necesitan un registro que sobreviva al rollback y no los presente como movimientos confirmados.
 - **Protección:** restringir cambios y accesos al historial, contemplar alteraciones privilegiadas y excluir tokens, contraseñas y datos sensibles innecesarios de los registros.
 - **Recuperación:** respaldos, archivado de WAL cuando corresponda y pruebas de restauración, con pérdida máxima de datos y tiempo de recuperación acordados. El WAL no sustituye la auditoría de negocio.
-- **Conciliación:** si interviene un core externo, contrastar sus identificadores y resultados con los nuestros; reconstruir la base local no confirma una ejecución externa.
+- **Conciliación:** si interviene un core externo, contrastar sus identificadores y resultados con los registros locales; reconstruir la base local no confirma una ejecución externa.
 
-## 6. Pendientes para acordar con el equipo
+## 6. Definiciones pendientes
 
-| Decisión | Qué falta definir |
+| Área | Definición pendiente |
 |---|---|
 | Autoridad sobre el dinero | Registro local o integración con un core externo. |
 | Cobertura contable | Plan mínimo de cuentas, cuentas internas, apertura y permisos; confirmar monedas, comisiones y descubierto. |
@@ -184,7 +184,7 @@ El balance entre varias filas requiere una rutina de contabilización y/o valida
 | Edición de entradas confirmadas desde la aplicación | Escritura rechazada. |
 | Restauración y reconstrucción | Historial recuperado y verificado hasta el punto acordado. |
 
-Estas verificaciones están previstas; aún no se ejecutaron.
+Estado de las verificaciones: pendientes de ejecución.
 
 ## Relación con el modelo de amenazas
 
