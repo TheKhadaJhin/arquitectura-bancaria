@@ -2,7 +2,7 @@
 
 **Alcance confirmado:** app para Android e iOS. PostgreSQL está indicado en el requerimiento.
 
-**Estado:** propuesta de stack y estructura inicial. Queda pendiente acordar el framework móvil, el backend, la organización de los repositorios y el almacenamiento seguro de Android. La configuración y verificación de proyectos, CI y protecciones de ramas están pendientes.
+**Estado:** propuesta de stack y estructura inicial. Se incorporan Gemini, HashiCorp Vault y Kafka a las decisiones documentadas. Queda pendiente acordar el framework móvil, el backend, la organización de los repositorios y el almacenamiento seguro de Android. La configuración y verificación de proyectos, CI y protecciones de ramas están pendientes.
 
 ## Criterio de elección
 
@@ -14,11 +14,16 @@ Propongo seleccionar el stack según los estándares del equipo, la cobertura de
 |---|---|---|
 | Comunicación app–backend | API REST sobre HTTPS, con representaciones JSON | Propuesta coherente con los contratos preparados. La misma API atendería clientes Android e iOS. |
 | Base de datos | PostgreSQL | Incluido en los requerimientos. El papel de PostgreSQL frente a un posible core bancario externo sigue pendiente de confirmación. |
-| Backend | Python + FastAPI | Candidato para una API REST modular: validación de esquemas y documentación OpenAPI. Sujeto al estándar del equipo. |
+| Backend | Python + FastAPI | Utilizado en el prototipo separado del orquestador. Candidato para el backend modular objetivo, sujeto al estándar del equipo. |
 | Persistencia | SQLAlchemy + Alembic | Candidatos para manejar acceso a datos, transacciones explícitas y migraciones versionadas si se elige Python. |
 | App Android e iOS | React Native + TypeScript | Candidato para compartir parte del código. Validar experiencia del equipo, SDK de identidad, funciones nativas y mantenimiento en ambas plataformas. |
 | Almacenamiento de sesión | Keychain en iOS; solución de cifrado apoyada en Android Keystore por evaluar en Android | El criterio de protección es común; biblioteca, configuración y pruebas son específicas de cada plataforma. |
-| Identidad y API Gateway | Proveedor y producto por definir | Mantener OAuth 2.0 / OIDC y las responsabilidades descritas en la arquitectura. Confirmar primero las soluciones existentes en la empresa. |
+| Identidad y API Gateway | Selección pendiente | Mantener OAuth 2.0 / OIDC y las responsabilidades descritas en la arquitectura. Confirmar primero las soluciones existentes en la empresa. |
+| Servicio de IA | Gemini | Servicio elegido para el asistente. La versión concreta del modelo se configura y valida en el entorno. |
+| SDK de IA para Python | Google GenAI SDK (`google-genai`) | Biblioteca oficial recomendada. Adaptar el cliente del prototipo y verificar las funciones antes de cerrar la integración. [13] |
+| Secretos y claves | HashiCorp Vault | Herramienta incluida en la propuesta. Concretar motores, identidades, políticas, rotación y recuperación; evaluar Transit para la función criptográfica. [14][15] |
+| Eventos | Apache Kafka + Outbox Pattern | Kafka distribuye eventos; la outbox registra la intención de publicación en la transacción local. Configuración y operación pendientes. |
+| Pasos distribuidos | Saga, cuando el flujo lo requiera | Coordinar estados y compensaciones entre sistemas independientes; no sustituye a Kafka ni a la outbox. |
 
 La comunicación propuesta utiliza una API REST sobre HTTPS con representaciones JSON. REST es independiente del lenguaje y del framework del backend [10]. La autenticación mantiene los protocolos OAuth/OIDC del proveedor.
 
@@ -34,6 +39,16 @@ El criterio propuesto es mantener el access token en memoria y proteger el refre
 
 Antes de cerrar la decisión, verificar versiones mínimas de Android, reglas de copia/restauración, pérdida o invalidación de claves, acceso con el dispositivo bloqueado y borrado al cerrar sesión. Estos pendientes se incorporan a autenticación y STRIDE.
 
+## Integración del asistente
+
+El orquestador forma parte del backend modular. El adaptador de Gemini encapsula la llamada externa y conserva una configuración por entorno para modelo, timeout total, límites de salida, cuotas y máximo de funciones por turno. El catálogo inicial admite `get_account_balance` y `prepare_transfer`; la ejecución financiera permanece en el circuito transaccional.
+
+Para Python se propone `google-genai`. El prototipo mostrado utiliza la interfaz heredada `google-generativeai`; migrar implica adaptar cliente, sesiones y manejo de funciones, además de cambiar la dependencia. La disponibilidad de una versión de Gemini debe comprobarse con la configuración real; no se fija un nombre de modelo no verificado en el diseño. [13]
+
+Las credenciales se obtienen mediante la integración del backend con HashiCorp Vault. El archivo de ejemplo de entorno documenta nombres de variables y valores ficticios. El repositorio, la app móvil y los mensajes del modelo no incluyen secretos.
+
+Las primeras pruebas de integración deben separar una respuesta de texto, una consulta real al mock y la preparación de una tarjeta. También deben cubrir respuestas inválidas, fallos de proveedor y que preparar una transferencia no genere movimientos. El contrato objetivo y las diferencias de la demo están en [04-contratos-api.md](04-contratos-api.md).
+
 ## Organización propuesta
 
 La organización propuesta mantiene este repositorio para documentación y separa backend y mobile en dos repositorios, cada uno con su configuración y verificaciones. Los cambios de contratos deben coordinarse mediante una versión común de referencia. La organización definitiva queda pendiente.
@@ -46,13 +61,20 @@ Las siguientes rutas representan responsabilidades previstas; la estructura defi
 | Backend | `modules/identity/` | Identidad local, validación de tokens y autorización. |
 | Backend | `modules/accounts/` | Consulta de cuentas y saldo autorizado. |
 | Backend | `modules/ledger/` | Casos de uso de transferencias, asientos, idempotencia y reversas. |
+| Backend | `modules/assistant/` | Conversaciones, funciones permitidas y propuestas para confirmación. |
+| Backend | `modules/risk/` | Evaluación de riesgo y política previa a autorizar. |
+| Backend | `infrastructure/ai/` | Adaptador de Gemini, esquemas y límites de llamadas. |
+| Backend | `infrastructure/secrets/` | Acceso técnico a HashiCorp Vault según permisos. |
+| Backend | `infrastructure/events/` | Publicador de outbox y adaptadores de Kafka. |
 | Backend | `infrastructure/` | PostgreSQL, configuración e integraciones externas. |
 | Backend | `migrations/` y `tests/` | Cambios de esquema y verificaciones. |
-| Mobile | `features/` | Pantallas y flujos de sesión y cuentas. |
+| Mobile | `features/` | Pantallas y flujos de sesión, cuentas y chat con tarjetas de confirmación. |
 | Mobile | `core/` | Cliente HTTP, integración OIDC y almacenamiento seguro. |
 | Mobile | `tests/` | Pruebas del comportamiento de la aplicación. |
 
 El backend se mantiene como una aplicación modular. Las carpetas agrupan responsabilidades dentro de la misma aplicación; las reglas contables se concentran en el circuito del ledger y su transacción SQL.
+
+Una carpeta o módulo no constituye una frontera de seguridad. Si los componentes comparten proceso e identidad técnica, también pueden compartir sus privilegios; el aislamiento efectivo debe verificarse al definir identidades, políticas de Vault y despliegue.
 
 ## Alcance del scaffolding
 
@@ -74,6 +96,9 @@ Quedan pendientes las siguientes definiciones:
 - Framework móvil, responsables de ambas plataformas y solución mantenida para proteger tokens en Android.
 - Organización y acceso a los repositorios, Mac/Xcode, entorno Android y CI disponibles.
 - Proveedor de identidad, Gateway y versiones compatibles de las herramientas elegidas.
+- Modelo de Gemini accesible, adaptación al SDK propuesto, límites de uso y tratamiento de datos.
+- Despliegue y políticas de HashiCorp Vault; almacenamiento aislado del PII Data Vault.
+- Topología, retención y consumidores de Kafka; esquema de outbox y alcance de Saga.
 
 ## Referencias oficiales
 
@@ -89,3 +114,6 @@ Quedan pendientes las siguientes definiciones:
 10. [Fielding: estilo arquitectónico REST](https://ics.uci.edu/~fielding/pubs/dissertation/rest_arch_style.htm).
 11. [Android: EncryptedSharedPreferences](https://developer.android.com/reference/androidx/security/crypto/EncryptedSharedPreferences).
 12. [Android Keystore](https://developer.android.com/privacy-and-security/keystore).
+13. [Google: SDK oficiales y bibliotecas heredadas de Gemini](https://ai.google.dev/gemini-api/docs/libraries).
+14. [HashiCorp Vault: KV](https://developer.hashicorp.com/vault/docs/secrets/kv).
+15. [HashiCorp Vault: Transit](https://developer.hashicorp.com/vault/docs/secrets/transit).

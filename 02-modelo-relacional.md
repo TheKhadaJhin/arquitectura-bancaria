@@ -89,7 +89,7 @@ El saldo de una cuenta de cliente es la suma de sus entradas vinculadas a operac
 
 ## 3. Confirmación de una transferencia
 
-Precondiciones: usuario autenticado y activo, autorización para debitar el origen, cuentas distintas y activas, moneda admitida e importe válido. El destino puede pertenecer a otro usuario.
+Precondiciones: usuario autenticado y activo, autorización para debitar el origen, cuentas distintas y activas, moneda admitida e importe válido. La confirmación del usuario y la evaluación de riesgo deben corresponder a esos mismos datos; el step-up se valida cuando lo exige la política. Las llamadas externas ocurren antes de tomar los bloqueos contables. El destino puede pertenecer a otro usuario.
 
 Para una solicitud nueva, todas las escrituras se realizan dentro de **una transacción SQL**:
 
@@ -160,6 +160,16 @@ El balance entre varias filas requiere una rutina de contabilización, validaci�
 - **Recuperación:** respaldos, archivado de WAL cuando corresponda y pruebas de restauración, con pérdida máxima de datos y tiempo de recuperación acordados. El WAL no sustituye la auditoría de negocio.
 - **Conciliación:** si interviene un core externo, contrastar sus identificadores y resultados con los registros locales; reconstruir la base local no confirma una ejecución externa.
 
+### Propuestas del asistente y datos sensibles
+
+Una propuesta generada desde el chat no crea asientos ni equivale a una operación `POSTED`. El backend debe conservar su identificador, usuario propietario, origen, destino, moneda, importe, vencimiento y estado. Estos datos se obtienen y validan en los módulos de negocio.
+
+Al confirmar, el servidor recupera la propuesta, verifica su pertenencia y vigencia y utiliza sus datos canónicos. La misma propuesta debe poder vincularse como máximo a una operación efectiva, incluso si llegan confirmaciones concurrentes con distintas claves de idempotencia. Para el flujo SQL interno, la vinculación y el cambio de estado se confirman junto con los asientos. Alterar monto o destino exige una nueva propuesta y confirmación.
+
+`conversation_id` solo identifica una conversación asociada al usuario autenticado. Los mensajes y las propuestas tienen una política de retención propia; no se utilizan para calcular saldos. El esquema de almacenamiento de conversaciones y propuestas queda pendiente y no está representado en las cuatro entidades del diagrama.
+
+El PII Data Vault conserva los datos personales cifrados y separados del registro contable. HashiCorp Vault gestiona secretos y operaciones con claves conforme a permisos específicos. El orquestador utiliza los módulos bancarios autorizados y no recibe credenciales de base de datos o permisos de descifrado generales.
+
 ## 6. Definiciones pendientes
 
 | Área | Definición pendiente |
@@ -169,6 +179,8 @@ El balance entre varias filas requiere una rutina de contabilización, validaci�
 | Garantías en la base | Contabilización, inmutabilidad, estados y reversiones completas. |
 | Reintentos | Tiempos de bloqueo, recuperación de abortos y conservación de claves de idempotencia. |
 | Trazabilidad y recuperación | Esquema de auditoría, fechas y cortes, retención, protección y objetivos de restauración y conciliación. |
+| Asistente | Esquema de conversaciones y propuestas; pertenencia, vencimiento y vínculo único con la operación. |
+| Eventos y datos sensibles | Completar tablas de eventos/outbox y aislamiento del PII Data Vault con políticas de HashiCorp Vault. |
 
 ## 7. Verificaciones previstas
 
@@ -183,12 +195,15 @@ El balance entre varias filas requiere una rutina de contabilización, validaci�
 | Rechazo o rollback | Auditoría del intento, sin presentarlo como confirmación. |
 | Edición de entradas confirmadas desde la aplicación | Escritura rechazada. |
 | Restauración y reconstrucción | Historial recuperado y verificado hasta el punto acordado. |
+| Preparar una propuesta desde el chat | Ninguna entrada del ledger ni cambio de saldo. |
+| Confirmar una propuesta vencida, ajena o alterada | Rechazo sin nuevos movimientos. |
+| Confirmaciones concurrentes de la misma propuesta | Una sola operación efectiva, incluso con claves de idempotencia distintas. |
 
 Estado de las verificaciones: pendientes de ejecución.
 
 ## Relación con el modelo de amenazas
 
-El [análisis STRIDE](05-threat-model.md) vincula estas reglas con TM-04–TM-08, TM-10, TM-12 y TM-13: autorización, alteración del dinero, duplicados, auditoría, saturación y recuperación. Antes de implementar deben concretarse los permisos de escritura, el mecanismo de contabilización y las evidencias de esas pruebas.
+El [análisis STRIDE](05-threat-model.md) vincula estas reglas con TM-04–TM-08, TM-10, TM-12, TM-13 y TM-18–TM-19: autorización, alteración del dinero, duplicados, auditoría, saturación y recuperación. Antes de implementar deben concretarse los permisos de escritura, el mecanismo de contabilización y las evidencias de esas pruebas.
 
 ## Referencias
 

@@ -14,6 +14,7 @@ Propongo delegar el inicio de sesión en un **proveedor de identidad compatible 
 | Proveedor de identidad | Autenticar al usuario, aplicar MFA según la política acordada y emitir, renovar y revocar tokens. |
 | API Gateway | Aplicar controles generales de entrada y dirigir las peticiones al backend. |
 | Backend | Validar el access token, resolver el usuario local y comprobar permisos por recurso. |
+| Asistente / orquestador | Mantener el contexto del usuario autenticado y comprobar la pertenencia de la conversación y los permisos de cada función. |
 
 | Token | Para qué se utiliza | Manejo en la app |
 |---|---|---|
@@ -105,6 +106,16 @@ sequenceDiagram
 
 Criterio propuesto: `401` para autenticación inválida; `403` para falta de permiso funcional; `404` para cuenta inexistente o no accesible. Los cuerpos de error se detallan en [contratos de API](04-contratos-api.md).
 
+### Sesión del asistente
+
+El chat se atiende detrás del gateway y requiere la misma validación de access token que las demás operaciones. El servidor vincula cada conversación con el usuario local resuelto desde `(iss, sub)`. Recibir un `conversation_id` no autoriza a consultar su historial; un identificador ajeno o inexistente obtiene la misma respuesta de no encontrado.
+
+Cada función del asistente recibe el contexto autorizado desde el servidor. Los identificadores o permisos escritos en el mensaje, o sugeridos por Gemini, no cambian la identidad de quien opera. Las consultas aplican los permisos de Cuentas y las propuestas pasan por el módulo Transaccional.
+
+Gemini utiliza una credencial técnica del backend gestionada mediante HashiCorp Vault; los tokens del usuario no se envían al modelo ni se incluyen en el historial. El acceso a esa credencial se limita al adaptador de IA y no concede permisos para descifrar datos personales.
+
+Confirmar una transferencia requiere una solicitud separada, asociada a la propuesta y a su contenido exacto. El backend verifica la confirmación y la evidencia de step-up cuando corresponda; un booleano del cliente, una frase del chat o la biometría local por sí sola no acreditan esa autorización. La sesión del chat no sustituye estos controles.
+
 ## 4. Renovación, almacenamiento y cierre
 
 ### Renovación
@@ -136,7 +147,7 @@ Definir versiones mínimas, protección de claves, acceso con el dispositivo blo
 
 ### Cierre de sesión
 
-Detener renovaciones, impedir que una respuesta tardía restaure la sesión, solicitar la revocación del refresh token y borrar credenciales locales incluso si esa solicitud falla.
+Detener renovaciones, impedir que una respuesta tardía restaure la sesión, solicitar la revocación del refresh token y borrar credenciales locales incluso si esa solicitud falla. Limpiar el contexto local del chat y descartar respuestas tardías de la sesión cerrada; al volver a entrar, comprobar la pertenencia de cualquier conversación recuperada.
 
 El cierre local no confirma una revocación remota fallida. Un access token JWT puede seguir válido hasta vencer sin invalidación adicional. La sesión del navegador en el proveedor tiene un cierre separado, a integrar si se requiere. [8][9]
 
@@ -150,6 +161,8 @@ El cierre local no confirma una revocación remota fallida. Un access token JWT 
 | Renovación y cierre | Recuperación de respuestas perdidas, invalidación inmediata y alcance del cierre en el proveedor. |
 | Almacenamiento | Política de Keychain en iOS; integración de cifrado y Keystore en Android, versiones soportadas, copias y recuperación ante pérdida de claves. |
 | Dispositivo | Acceso en segundo plano y necesidad de vincular tokens criptográficamente al cliente o dispositivo. |
+| Asistente | Caducidad y retención de conversaciones, permisos del chat y autenticación técnica del adaptador ante Vault y Gemini. |
+| Confirmación | Evidencia de autorización vinculada al contenido de la propuesta y política de step-up. |
 
 ## 6. Verificaciones previstas
 
@@ -158,6 +171,9 @@ El cierre local no confirma una revocación remota fallida. Un access token JWT 
 | `state`, `nonce` o PKCE incorrectos | El flujo se rechaza en la validación correspondiente. |
 | Firma, emisor, audiencia o vigencia inválidos; ID token enviado a la API | La API rechaza la credencial. |
 | Usuario consulta una cuenta ajena | No se devuelve información de esa cuenta. |
+| Usuario cambia el identificador de conversación | No accede al historial ni a propuestas de otra persona. |
+| Mensaje o función solicita actuar como otro usuario | Se conserva la identidad validada y se rechaza el acceso no autorizado. |
+| Credenciales y contexto enviados a Gemini | No se transmiten tokens de usuario ni secretos técnicos en los mensajes. |
 | Varias peticiones necesitan renovar | Una sola renovación en curso. |
 | Respuesta de renovación perdida | Recuperación acordada, sin reintentos ciegos. |
 | Logout durante una renovación | La respuesta tardía no restaura la sesión. |
@@ -169,7 +185,7 @@ Estado de las verificaciones: pendientes de ejecución. Los casos comunes de log
 
 ## Relación con el modelo de amenazas
 
-El [análisis STRIDE](05-threat-model.md) relaciona este flujo con TM-01–TM-04 y TM-11: suplantación, alteración del login, robo de tokens y elusión de permisos. Proveedor, duración, revocación y políticas de autenticación adicional deben concretarse antes de dar esos controles por verificados.
+El [análisis STRIDE](05-threat-model.md) relaciona este flujo con TM-01–TM-04, TM-11, TM-14 y TM-18: suplantación, alteración del login, robo de tokens y elusión de permisos. Proveedor, duración, revocación y políticas de autenticación adicional deben concretarse antes de dar esos controles por verificados.
 
 ## Referencias
 

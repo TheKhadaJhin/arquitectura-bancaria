@@ -2,17 +2,17 @@
 
 Presento el análisis inicial de amenazas de la aplicación bancaria. Cada escenario se vincula con los flujos afectados, los controles propuestos y la evidencia necesaria para verificarlos.
 
-**Estado:** análisis inicial. Los controles están propuestos y su implementación y verificación están pendientes. Las 13 amenazas identificadas permanecen abiertas.
+**Estado:** análisis inicial. Los controles están propuestos y su implementación y verificación están pendientes. Las 19 amenazas identificadas permanecen abiertas. Esta revisión incorpora el asistente con Gemini y HashiCorp Vault.
 
 ## 1. Alcance y supuestos
 
-Incluye app Android e iOS, proveedor OIDC, API Gateway, backend modular, PostgreSQL, auditoría y recuperación. Cubre login, tokens, consulta de saldo y el diseño de transferencias internas y reversiones. El contrato de transferencias todavía no está definido.
+Incluye app Android e iOS, proveedor OIDC, API Gateway, backend modular, asistente con Gemini, PostgreSQL, HashiCorp Vault, PII Data Vault, auditoría y recuperación. Cubre login, tokens, saldo, chat, preparación de propuestas y diseño de transferencias internas y reversiones. El contrato de ejecución de transferencias todavía no está definido.
 
 El alcance de ambas plataformas está confirmado; el framework móvil y la solución de almacenamiento de Android siguen pendientes. TM-02 y TM-03 requieren revisar por plataforma el retorno del login, persistencia, copias, acceso a claves y cierre de sesión. Este análisis común todavía necesita concretarse con las bibliotecas y configuraciones elegidas.
 
 El supuesto actual es que PostgreSQL registra el dinero de forma autoritativa. Incorporar un core externo requiere ampliar los flujos y analizar confirmaciones, duplicados y conciliación entre sistemas.
 
-**Activos:** identidad y tokens; cuentas y saldos; integridad del ledger; evidencias de operaciones; disponibilidad y copias recuperables.
+**Activos:** identidad y tokens; cuentas y saldos; integridad del ledger; evidencias de operaciones; conversaciones y propuestas; datos enviados a Gemini; credenciales técnicas y claves; disponibilidad y copias recuperables.
 
 **Actores considerados:** atacante externo, usuario autenticado que modifica solicitudes, persona con acceso al dispositivo y proceso o cuenta operativa comprometida. La app puede ser manipulada; las decisiones de autorización se toman en el servidor.
 
@@ -48,6 +48,8 @@ flowchart TB
 
 F1 agrupa el login por navegador del sistema y los intercambios de tokens de la app; su secuencia está en autenticación. La línea discontinua F7 es una dependencia para validar tokens, no una consulta obligatoria por petición.
 
+El esquema anterior muestra los flujos base F1–F7. Los cruces adicionales del asistente y de los almacenes protegidos se detallan en la tabla como F8–F11 y están representados a nivel de componentes en [arquitectura](01-arquitectura.md).
+
 Los bloques muestran dominios lógicos de confianza, no una red ya desplegada. Auditoría y respaldos son capacidades a concretar; su ubicación y sus permisos deben impedir que una misma credencial comprometa todas las copias de la evidencia.
 
 | Cruce | Controles a verificar |
@@ -57,6 +59,10 @@ Los bloques muestran dominios lógicos de confianza, no una red ya desplegada. A
 | F3: gateway → backend | Origen permitido, protección del canal y validación de identidad y permisos en el backend. Un encabezado no sustituye al token validado. |
 | F4: backend → base | Identidad del servicio, permisos mínimos, consultas parametrizadas y escrituras financieras controladas. |
 | F5/F6: eventos y recuperación | Accesos diferenciados, integridad, retención y restauración verificable. |
+| F8: orquestador ↔ Gemini | Contexto mínimo admitido, credencial técnica protegida, respuesta no confiable, límites y timeout total. |
+| F9: orquestador → módulos bancarios | Identidad desde sesión validada, funciones permitidas, argumentos y autorización comprobados en el servidor. |
+| F10: backend → HashiCorp Vault | Identidad del servicio y políticas específicas para secretos y uso de claves, con auditoría. |
+| F11: módulos autorizados → PII Data Vault | Acceso mínimo a datos cifrados, permisos de descifrado separados y trazabilidad. |
 
 **Requisito propuesto:** proteger los tramos de red con TLS y verificar certificados e identidades del extremo remoto; concretar la autenticación entre servicios al elegir el despliegue. La red interna no elimina estas comprobaciones. [8]
 
@@ -81,10 +87,16 @@ La prioridad es una estimación inicial según impacto y exposición: **alta** p
 | TM-11 | S/E | Acceder directamente al backend o falsificar encabezados internos para eludir controles del gateway. F3. | Alta |
 | TM-12 | T/I/E | Conseguir que un dato recibido se interprete como parte de una consulta SQL. F2–F4. | Alta |
 | TM-13 | T/D | Tras una alteración o pérdida de datos, descubrir que los respaldos también fueron afectados o no permiten recuperar el ledger. F4/F6. | Alta |
+| TM-14 | S/I/E | Cambiar la conversación o el contexto de usuario para obtener historial, saldo o propuestas ajenas. F2/F3/F9. | Alta |
+| TM-15 | T/E | Instrucciones del chat o contenido recuperado inducen una llamada de función no permitida o con argumentos manipulados. F8/F9. | Alta |
+| TM-16 | I | Enviar a Gemini tokens, secretos o datos personales no necesarios; exponerlos en respuestas o logs. F5/F8/F10/F11. | Alta |
+| TM-17 | D | Bucles de funciones, mensajes excesivos o demoras del proveedor consumen cuotas y recursos del backend. F2/F8/F9. | Alta |
+| TM-18 | T/E/R | Confirmar una propuesta alterada, vencida o ajena, repetir su ejecución o eludir riesgo y step-up desde el chat. F2–F4/F9. | Alta |
+| TM-19 | I/E | Una identidad técnica accede a secretos o descifra datos fuera de sus permisos previstos. F10/F11. | Alta |
 
 ## 4. Controles y evidencia esperada
 
-Las pruebas siguientes se ejecutarán en un entorno autorizado, con datos ficticios. **Estado común de las 13 amenazas: abierto; control propuesto y evidencia pendiente.**
+Las pruebas siguientes se ejecutarán en un entorno autorizado, con datos ficticios. **Estado común de las 19 amenazas: abierto; control propuesto y evidencia pendiente.**
 
 | ID | Control propuesto | Evidencia esperada |
 |---|---|---|
@@ -101,6 +113,12 @@ Las pruebas siguientes se ejecutarán en un entorno autorizado, con datos fictic
 | TM-11 | Restringir acceso directo; verificar el canal interno; mantener validación y autorización en el backend e ignorar identidades aportadas por encabezados no confiables. | Rechazar acceso desde orígenes no permitidos y encabezados de usuario falsos; una petición sin token válido no obtiene acceso. |
 | TM-12 | Consultas parametrizadas, validación de tipos y permisos mínimos. No concatenar entradas en SQL. [4][5] | Revisar las consultas y comprobar que valores con sintaxis SQL se rechazan o se tratan como datos, sin cambiar la consulta. |
 | TM-13 | Respaldos protegidos con accesos separados, política de retención, verificación de integridad y pruebas de restauración. | Restaurar en un entorno aislado y reconstruir saldos hasta el corte acordado; comprobar pérdida de datos y tiempo de recuperación. |
+| TM-14 | Vincular conversaciones y propuestas al usuario autenticado; comprobar pertenencia en cada acceso y serializar turnos. | Dos usuarios intercambian identificadores y no acceden a historial ni resultados ajenos; las respuestas de turnos concurrentes no se mezclan. |
+| TM-15 | Lista de funciones, esquemas estrictos y autorización fuera del modelo; sin SQL, URLs arbitrarias ni herramienta de ejecución financiera. Tratar la salida como contenido no confiable. [9][10] | Pruebas de instrucciones directas e indirectas con funciones simuladas: ningún efecto fuera de los permisos, aunque el modelo proponga la llamada. |
+| TM-16 | Definir campos admitidos para Gemini; excluir credenciales, minimizar datos y restringir logs e historial. | Inspeccionar solicitudes y registros con datos ficticios; no contienen tokens ni secretos. Un fallo de consulta nunca se presenta como saldo válido. |
+| TM-17 | Limitar mensaje, historial, tokens, llamadas a funciones, concurrencia y tiempo total; acotar reintentos y separar recursos del chat. | Simular demoras, errores y bucles: el turno finaliza con error controlado y las funciones bancarias directas conservan capacidad. |
+| TM-18 | Propuesta canónica con propietario, contenido y vencimiento; confirmación separada verificada, vínculo único a la operación y controles financieros completos. [11] | Alteración, expiración o confirmación ajena se rechazan. Confirmaciones simultáneas, incluso con claves distintas, producen como máximo un movimiento. |
+| TM-19 | Políticas de Vault por servicio, secreto y operación; separar administración de claves, uso de claves y lectura de PII. [12] | La identidad del adaptador de IA obtiene solo su credencial autorizada; no lee otros secretos, no administra claves ni descifra PII. Revisar accesos privilegiados. |
 
 La autorización por recurso debe comprobarse en cada operación protegida. [3] La partida doble aporta coherencia contable; necesita autorización, integridad y control de quién puede escribir para proteger el dinero.
 
@@ -114,6 +132,8 @@ Las responsabilidades se agrupan por área. Queda pendiente asignar responsables
 | Backend y datos | TM-04–TM-08, TM-12 | Modelo lógico, secciones 2–5; contratos de saldo y futuros contratos de transferencias. |
 | Plataforma y operación | TM-07–TM-11, TM-13 | Controles de acceso, transporte, auditoría, límites y recuperación de este análisis. |
 | Backend y móvil | TM-04, TM-09, TM-10 | [Contratos de API](04-contratos-api.md), secciones 4–5. |
+| Asistente, backend y móvil | TM-14–TM-18 | Contratos, secciones 6–8; autenticación y modelo lógico. |
+| Plataforma, secretos y datos | TM-16, TM-19 | Arquitectura, capa 4; políticas de Vault y aislamiento de datos. |
 
 ## 6. Decisiones abiertas y riesgo residual
 
@@ -121,7 +141,10 @@ Las responsabilidades se agrupan por área. Queda pendiente asignar responsables
 - **Sesión comprometida:** un bearer token válido robado puede utilizarse mientras siga vigente. Queda pendiente definir duración, revocación, MFA y reautenticación para operaciones sensibles; Keychain y PKCE no eliminan por sí solos ese riesgo.
 - **Acceso privilegiado:** proteger las escrituras de la aplicación no protege automáticamente frente a un administrador comprometido. Faltan separación de permisos, controles sobre la operación y protección independiente de evidencias y respaldos.
 - **Consentimiento de una operación:** una identidad técnica válida no demuestra por sí sola la intención del titular. Queda pendiente definir la política de confirmación de transferencias y reversiones.
-- **Configuración real:** faltan proveedor, despliegue, límites, timeouts, esquema de auditoría y objetivos de recuperación. No se asigna riesgo residual como aceptado mientras estas decisiones y sus verificaciones sigan abiertas.
+- **Gemini y conversaciones:** definir modelo, cuotas, límites de funciones, datos admitidos, retención y comportamiento ante fallos. El filtrado del prompt necesita autorización y validación en cada función; por sí solo no asegura el control.
+- **Vault y datos personales:** concretar identidades, políticas, motores, rotación, auditoría, recuperación y alcance de descifrado. El cifrado no evita el abuso de una identidad que ya tiene permisos legítimos.
+- **Eventos y core:** queda pendiente ampliar escenarios y pruebas de publicación outbox/Kafka, retención, fallos de consumidores, atestación de dispositivo y conciliación con sistemas externos.
+- **Configuración real:** faltan IdP/Gateway, despliegue, límites, timeouts, esquema de auditoría y objetivos de recuperación. No se asigna riesgo residual como aceptado mientras estas decisiones y sus verificaciones sigan abiertas.
 
 ## 7. Mantenimiento del análisis
 
@@ -139,3 +162,7 @@ El análisis debe actualizarse al elegir stack y proveedor, incorporar endpoints
 6. [OWASP: registro de eventos](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
 7. [OWASP: denegación de servicio](https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html).
 8. [OWASP: seguridad del transporte](https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html).
+9. [OWASP: prevención de prompt injection](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html).
+10. [OWASP: privilegios excesivos en asistentes](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/).
+11. [OWASP: autorización de transacciones](https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html).
+12. [HashiCorp Vault: políticas](https://developer.hashicorp.com/vault/docs/concepts/policies).

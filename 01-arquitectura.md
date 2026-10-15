@@ -1,8 +1,8 @@
 # 01 · Arquitectura propuesta para la app bancaria
 
-**Estado:** propuesta de arquitectura. La implementación y validación de los controles están pendientes, al igual que la selección de proveedores y la definición de contratos externos.
+**Estado:** propuesta de arquitectura actualizada al 14 de octubre de 2026. Gemini es el servicio de IA elegido para el asistente y HashiCorp Vault se incorpora para secretos y claves. La implementación y validación de los controles, la configuración operativa, la selección del IdP/Gateway y los contratos externos siguen pendientes.
 
-Propongo una app para Android e iOS, un proveedor de identidad separado y un backend modular. El diseño separa la persistencia y protección de los datos de la integración con eventos y sistemas externos.
+Propongo una app para Android e iOS, un proveedor de identidad separado y un backend modular. El diseño separa la persistencia y protección de los datos de la integración con eventos y sistemas externos. El asistente se incorpora como un módulo del backend que utiliza Gemini y accede a las funciones bancarias permitidas.
 
 ## Vista general
 
@@ -10,9 +10,9 @@ Propongo una app para Android e iOS, un proveedor de identidad separado y un bac
 
 [Versión vectorial del diagrama](diagrama-arquitectura-bancaria.svg).
 
-El flujo principal sigue el recorrido **app → gateway → backend**. El proveedor de identidad está a la izquierda. Desde el backend se abren las dos ramas inferiores: **persistencia y auditoría**, e **integración externa y resiliencia**. Las notas junto a cada componente indican sus controles principales.
+El flujo principal sigue el recorrido **app → gateway → backend**. El proveedor de identidad está a la izquierda. Desde el backend se abren las dos ramas inferiores: **persistencia y auditoría**, e **integración externa y resiliencia**. El asistente aparece dentro del backend y Gemini fuera de ese límite, como servicio externo. Las notas junto a cada componente indican sus controles principales.
 
-Las flechas muestran relaciones entre componentes o capas; el recorrido concreto depende de la operación. Los recuadros punteados agrupan responsabilidades. Los límites de confianza deben concretarse mediante identidades, permisos y controles de acceso. Los tres módulos del backend forman parte de una misma aplicación.
+Las flechas muestran relaciones entre componentes o capas; el recorrido concreto depende de la operación. Los recuadros punteados agrupan responsabilidades. Los límites de confianza deben concretarse mediante identidades, permisos y controles de acceso. Los módulos del backend, incluido el orquestador del asistente, forman parte de una misma aplicación.
 
 ## Responsabilidades y controles
 
@@ -24,6 +24,7 @@ Las flechas muestran relaciones entre componentes o capas; el recorrido concreto
 - **Device attestation:** Google Play Integrity en Android y Apple App Attest en iOS. El servidor verifica las evidencias y su vínculo con la solicitud. Aportan señales de integridad de la app y del dispositivo; la identidad del usuario y sus permisos se comprueban por separado.
 - **Idempotencia:** la app conserva `X-Idempotency-Key` al reintentar el mismo pedido. El backend persiste la clave, su alcance y contenido para evitar repetir el efecto.
 - **Biometría / step-up:** una operación sensible puede requerir verificación adicional. El servidor debe verificar la evidencia y vincularla con la operación concreta.
+- **Chat y confirmación:** la app presenta las respuestas del asistente y una tarjeta con los datos de la transferencia propuesta. El botón de confirmación inicia una solicitud separada al backend; un mensaje del chat no confirma el movimiento.
 
 ### Capa 2 · Borde / gateway y seguridad
 
@@ -40,10 +41,33 @@ La flecha **JWKS en caché** representa las claves públicas que permiten verifi
 | **Risk & Anti-Fraud Engine** | Evalúa la operación y las señales verificadas antes de autorizar el movimiento. Puede permitir continuar, rechazar o pedir verificación adicional según la política. |
 | **Usuarios y Cuentas** | Comprueba el estado del usuario y su relación con cada cuenta —ownership—, además de los permisos necesarios para operar. |
 | **Transaccional / Movimientos** | Coordina estados, idempotencia, fondos y concurrencia. Confirma la operación solo cuando se cumplen todas las reglas. |
+| **Asistente / Orquestador IA** | Gestiona el chat, limita las funciones disponibles, valida sus parámetros y conserva el contexto del usuario autenticado. Consulta los módulos bancarios o prepara una propuesta para confirmación. |
 
 La decisión de riesgo debe corresponder al monto, destino y contexto que finalmente se ejecutan. En el flujo interno propuesto, las llamadas externas de evaluación ocurren antes de tomar los bloqueos contables; dentro de la transacción se revalidan fondos y reglas.
 
 La **máquina de estados** permite transiciones justificadas y conserva su historial. Un timeout externo puede dejar el resultado pendiente de confirmar. El estado actual puede cambiar; los asientos confirmados y los hechos históricos se conservan.
+
+### Asistente y servicio de IA
+
+Gemini interpreta la solicitud y puede proponer llamadas a funciones. El orquestador comprueba qué función se permite, sus argumentos y los permisos del usuario antes de utilizarla. Las reglas del servidor prevalecen sobre cualquier instrucción del chat o respuesta del modelo.
+
+| Función inicial | Resultado permitido |
+|---|---|
+| `get_account_balance` | Consultar el saldo de una cuenta autorizada mediante el módulo de Cuentas. |
+| `prepare_transfer` | Preparar datos de una transferencia y devolver una propuesta identificada, con vencimiento y confirmación pendiente. No contabiliza movimientos. |
+
+El recorrido propuesto es el siguiente:
+
+1. La app envía el mensaje por el gateway; el backend valida la sesión y el acceso a la conversación.
+2. El orquestador entrega a Gemini el contexto mínimo necesario y recibe texto o una llamada estructurada.
+3. Una función válida accede al caso de uso autorizado. El backend construye los datos de saldo o de la tarjeta a partir del resultado real; si falla la consulta, informa la indisponibilidad.
+4. Para transferir, el usuario revisa la tarjeta y confirma por una solicitud separada. El backend verifica usuario, propuesta, vencimiento, destino e importe, y aplica permisos, riesgo, step-up cuando corresponda, idempotencia y controles contables.
+
+El LLM no dispone de una función para ejecutar transferencias ni de acceso directo a PostgreSQL, Kafka, secretos o core. La confirmación debe quedar vinculada a los datos exactos que se ejecutan. El motor de riesgo conserva su función independiente del asistente.
+
+La conexión con Gemini lleva solo los datos admitidos por la política de contexto. Tokens de usuario, credenciales y claves quedan fuera de los mensajes. El prototipo utiliza datos ficticios; el uso de información real requiere definir su tratamiento, retención y configuración del servicio. Si Gemini falla, el chat devuelve un error controlado y las funciones bancarias directas mantienen su propio flujo.
+
+Los contratos propuestos y su diferencia con el prototipo están en [04-contratos-api.md](04-contratos-api.md), secciones 6 y 7. Las amenazas específicas se incorporan a [STRIDE](05-threat-model.md).
 
 ### Capa 4 · Persistencia y auditoría
 
@@ -51,7 +75,7 @@ La **máquina de estados** permite transiciones justificadas y conserva su histo
 - **Eventos append-only:** agregan el historial de hechos de cada transacción, con identificadores, tipo, versión y secuencia. Guardar únicamente el estado final no permite reconstruir todo lo sucedido. Adoptar Event Sourcing como fuente de verdad sería una decisión adicional.
 - **Outbox transaccional:** en el ejemplo interno, operación, asientos, evento e intención de publicación se guardan en la misma transacción SQL. Los metadatos de entrega pueden actualizarse sin alterar el hecho histórico.
 - **PII Data Vault:** protege datos personales sensibles mediante cifrado, acceso restringido y auditoría. El registro contable utiliza referencias y el mínimo de datos necesario. El diagrama agrupa esta responsabilidad en la capa de persistencia. Queda pendiente definir su aislamiento físico y lógico.
-- **Secrets Manager / KMS:** se agrupan visualmente para simplificar el esquema, pero tienen funciones distintas: credenciales técnicas y claves criptográficas, respectivamente. Los permisos de lectura y descifrado se restringen por separado. La tecnología concreta queda por seleccionar.
+- **Secrets Manager / KMS — HashiCorp Vault:** Vault es la herramienta incorporada a la propuesta para gestionar credenciales técnicas, incluida la credencial del servicio de IA. Para la función criptográfica puede utilizarse Transit, con políticas separadas para administrar claves y utilizarlas. Transit procesa cifrado y descifrado; el contenido cifrado se conserva en el almacén de datos. Quedan por definir autenticación de servicios, motores, rotación, recuperación y la eventual integración con un KMS externo. El PII Data Vault y HashiCorp Vault tienen responsabilidades diferentes.
 
 La inmutabilidad del historial necesita controles de escritura, auditoría de accesos privilegiados, conservación de copias y restauración probada. Estas garantías dependen de los controles de almacenamiento y acceso, además del uso de registros append-only.
 
@@ -95,8 +119,9 @@ Quedan pendientes las siguientes definiciones:
 
 1. **Ledger y core:** fuente oficial del dinero, estados, evidencia de confirmación y conciliación.
 2. **Riesgo y autenticación adicional:** reglas, vigencia y comportamiento ante indisponibilidad o dispositivos sin soporte.
-3. **Datos y secretos:** aislamiento del Data Vault, permisos de descifrado, proveedores y operación del pinning.
+3. **Datos y secretos:** aislamiento del Data Vault, configuración de HashiCorp Vault, permisos de descifrado y operación del pinning.
 4. **Eventos y operaciones distribuidas:** retención, orden, reintentos, límites de acumulación y alcance de Saga.
+5. **Asistente:** versión de modelo habilitada en Gemini, límites y timeouts, contexto admitido, conservación de conversaciones y contrato final de preparación/confirmación.
 
 ## Referencias
 
@@ -106,6 +131,10 @@ Quedan pendientes las siguientes definiciones:
 - [Android: Play Integrity](https://developer.android.com/google/play/integrity/standard) y [seguridad de red y pinning](https://developer.android.com/privacy-and-security/security-ssl).
 - [Apple: App Attest](https://developer.apple.com/videos/play/wwdc2021/10244/) y [AWS: conceptos de KMS](https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html).
 - [Microsoft: Circuit Breaker](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) y [OpenTelemetry: contexto de trazas](https://opentelemetry.io/docs/concepts/context-propagation/).
+
+- [Google: SDK de Gemini](https://ai.google.dev/gemini-api/docs/libraries).
+- [HashiCorp Vault: KV](https://developer.hashicorp.com/vault/docs/secrets/kv), [Transit](https://developer.hashicorp.com/vault/docs/secrets/transit) y [políticas](https://developer.hashicorp.com/vault/docs/concepts/policies).
+- [OWASP: prevención de prompt injection](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html) y [privilegios excesivos en asistentes](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/).
 
 <details>
 <summary>Diagrama en Mermaid</summary>
@@ -119,7 +148,8 @@ Emisión de tokens`"]
     subgraph CLIENTE["1. Capa cliente / dispositivo"]
         APP["`App móvil (iOS / Android)
 Pinning · Device Attestation
-X-Idempotency-Key · biometría / step-up`"]
+X-Idempotency-Key · biometría / step-up
+Chat y tarjetas de confirmación`"]
     end
 
     subgraph BORDE["2. Capa de borde / gateway y seguridad"]
@@ -136,7 +166,12 @@ Antes de autorizar`"]
 Ownership Validation`"]
         TX["`Transaccional / Movimientos
 Estados · idempotencia · concurrencia`"]
+        ASISTENTE["`Asistente / Orquestador IA
+Funciones permitidas
+Parámetros y permisos validados`"]
     end
+
+    GEMINI["Servicio de IA: Gemini"]
 
     subgraph DATOS["4. Capa de persistencia y auditoría"]
         direction LR
@@ -145,6 +180,7 @@ Ledger inmutable (Double-Entry)
 Eventos append-only · outbox
 PII Data Vault cifrado y aislado`"]
         KEYS["`Secrets Manager / KMS
+HashiCorp Vault
 Claves y credenciales
 Permisos separados`"]
         PG <--> KEYS
@@ -167,12 +203,15 @@ Vía adaptador`"]
     APP <-->|"OAuth 2.0 / OIDC: Code + PKCE"| IDP
     IDP -.->|"JWKS en caché"| GW
     APP -->|"HTTPS / TLS · access token"| GW
-    GW -->|"Solicitud a la API"| BE
+    GW -->|"Solicitudes de API y chat"| BE
+    ASISTENTE -->|"Consultas autorizadas"| CUENTAS
+    ASISTENTE -->|"Consulta / preparación"| TX
+    ASISTENTE <-->|"Contexto mínimo / respuesta estructurada"| GEMINI
     BE --> DATOS
     BE --> INTEGRACION
 
     classDef componente fill:#202524,stroke:#979b9f,color:#efefef
-    class APP,IDP,GW,RISK,CUENTAS,TX,PG,KEYS,BROKER,RES,CORE componente
+    class APP,IDP,GW,RISK,CUENTAS,TX,ASISTENTE,GEMINI,PG,KEYS,BROKER,RES,CORE componente
     style CLIENTE fill:#101318,stroke:#85898e,color:#efefef,stroke-dasharray:3 5
     style BORDE fill:#101318,stroke:#85898e,color:#efefef,stroke-dasharray:3 5
     style BE fill:#101318,stroke:#85898e,color:#efefef,stroke-dasharray:3 5
