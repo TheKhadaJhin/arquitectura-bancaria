@@ -1,140 +1,118 @@
-# 01 · Arquitectura propuesta para la app bancaria
+# 01 · Arquitectura de la aplicación bancaria
 
-**Estado:** propuesta de arquitectura actualizada al 14 de octubre de 2026. Gemini es el servicio de IA elegido para el asistente y HashiCorp Vault se incorpora para secretos y claves. La implementación y validación de los controles, la configuración operativa, la selección del IdP/Gateway y los contratos externos siguen pendientes.
+La propuesta organiza la app en cinco capas, con un proveedor de identidad separado. El backend concentra las reglas de negocio en una aplicación modular; el asistente utiliza Gemini a través de un orquestador dentro de ese backend.
 
-Propongo una app para Android e iOS, un proveedor de identidad separado y un backend modular. El diseño separa la persistencia y protección de los datos de la integración con eventos y sistemas externos. El asistente se incorpora como un módulo del backend que utiliza Gemini y accede a las funciones bancarias permitidas.
+**Estado:** diseño propuesto. La selección de IdP/Gateway, la configuración operativa y la verificación de controles siguen pendientes.
 
-## Vista general
+## 1. Vista general
 
 ![Arquitectura propuesta para la app bancaria](diagrama-arquitectura-bancaria.png)
 
-[Versión vectorial del diagrama](diagrama-arquitectura-bancaria.svg).
+[Abrir versión vectorial](diagrama-arquitectura-bancaria.svg).
 
-El flujo principal sigue el recorrido **app → gateway → backend**. El proveedor de identidad está a la izquierda. Desde el backend se abren las dos ramas inferiores: **persistencia y auditoría**, e **integración externa y resiliencia**. El asistente aparece dentro del backend y Gemini fuera de ese límite, como servicio externo. Las notas junto a cada componente indican sus controles principales.
+El recorrido principal es **app → gateway → backend**. Desde el backend se accede a persistencia y a integraciones externas. Las flechas representan relaciones entre componentes; no todos participan en cada solicitud. Los recuadros agrupan responsabilidades, pero el aislamiento efectivo depende de identidades, permisos y controles de acceso.
 
-Las flechas muestran relaciones entre componentes o capas; el recorrido concreto depende de la operación. Los recuadros punteados agrupan responsabilidades. Los límites de confianza deben concretarse mediante identidades, permisos y controles de acceso. Los módulos del backend, incluido el orquestador del asistente, forman parte de una misma aplicación.
+| Capa | Responsabilidad |
+|---|---|
+| **1. Cliente / dispositivo** | App Android e iOS: login, consultas, chat y confirmación visible de operaciones. |
+| **2. Gateway / seguridad** | El gateway es el punto de entrada; el WAF filtra tráfico HTTP. Se aplican validación de access tokens, límites y trazabilidad. |
+| **3. Backend modular** | Autorizar cada recurso, evaluar riesgo y aplicar las reglas de cuentas, transferencias y asistente. |
+| **4. Persistencia / auditoría** | Conservar el registro contable, los hechos de negocio y los datos protegidos. |
+| **5. Integración / resiliencia** | Publicar eventos y comunicarse con el core, controlando fallos y resultados inciertos. |
 
-## Responsabilidades y controles
+## 2. Identidad, dispositivo y entrada
 
-### Identidad y capa 1 · Cliente / dispositivo
+El **proveedor de identidad (IdP)** autentica y emite tokens mediante OAuth 2.0 / OIDC con Authorization Code + PKCE. Auth0, Keycloak y Cognito son opciones por evaluar. La app envía el access token a la API; los demás tokens y su almacenamiento se explican en [autenticación](03-autenticacion.md).
 
-- **Inicio de sesión:** OAuth 2.0 / OIDC con Authorization Code + PKCE. El proveedor emite los tokens; Auth0, Keycloak y Cognito son opciones pendientes de selección.
-- **Tokens:** la app presenta el access token a la API. El refresh token permite renovar el acceso según la política del proveedor. El ID token comunica el resultado de la autenticación y no se utiliza como credencial de la API. El access token se mantiene en memoria y el refresh token se protege mediante el almacenamiento seguro definido para cada plataforma.
-- **Canal seguro:** HTTPS/TLS y certificate pinning entre la app y el gateway. Deben definirse pins de respaldo, rotación y recuperación. Android desaconseja el pinning de forma general por el riesgo de interrumpir la conectividad ante cambios de certificados; su incorporación necesita una política operativa acordada.
-- **Device attestation:** Google Play Integrity en Android y Apple App Attest en iOS. El servidor verifica las evidencias y su vínculo con la solicitud. Aportan señales de integridad de la app y del dispositivo; la identidad del usuario y sus permisos se comprueban por separado.
-- **Idempotencia:** la app conserva `X-Idempotency-Key` al reintentar el mismo pedido. El backend persiste la clave, su alcance y contenido para evitar repetir el efecto.
-- **Biometría / step-up:** una operación sensible puede requerir verificación adicional. El servidor debe verificar la evidencia y vincularla con la operación concreta.
-- **Chat y confirmación:** la app presenta las respuestas del asistente y una tarjeta con los datos de la transferencia propuesta. El botón de confirmación inicia una solicitud separada al backend; un mensaje del chat no confirma el movimiento.
+El gateway aplica controles generales; el backend valida el token y decide si el usuario puede operar sobre el recurso solicitado. La línea **JWKS en caché** representa las claves públicas usadas para validar firmas, con actualización para su rotación; no exige consultar al IdP en cada petición.
 
-### Capa 2 · Borde / gateway y seguridad
+| Control del diagrama | Para qué sirve y qué falta concretar |
+|---|---|
+| HTTPS/TLS y certificate pinning | Proteger el canal y limitar los certificados o claves aceptados. El pinning necesita respaldo, rotación y recuperación: una renovación mal coordinada puede dejar la app sin conexión. Android lo desaconseja como opción general; su uso requiere una política operativa. |
+| Device attestation | Play Integrity / App Attest aportan señales de integridad. El servidor verifica la evidencia y su vínculo con la solicitud; la identidad y los permisos se comprueban por separado. |
+| Biometría / step-up | Verificación adicional para una operación sensible. El servidor debe comprobar evidencia vinculada al importe y destino; la biometría local por sí sola no acredita esa autorización. |
+| `X-Idempotency-Key` | Identifica una misma intención en sus reintentos. La app conserva la clave y el backend la persiste y controla. |
+| Trazabilidad y límites | `X-Correlation-ID` relaciona el recorrido; `X-Request-ID` identifica la solicitud. La infraestructura genera o valida estos valores y aplica rate limiting. |
 
-El **API Gateway / WAF** recibe las solicitudes y concentra los controles de entrada: validación del access token, filtrado de tráfico y rate limiting. Asigna o valida el contexto de seguimiento, incluido `X-Correlation-ID`, para relacionar los registros de una solicitud.
+CORS corresponde a clientes de navegador. Las listas de IP se aplican donde el canal lo permita; no se presupone una IP fija por teléfono.
 
-La flecha **JWKS en caché** representa las claves públicas que permiten verificar las firmas de los tokens. Deben comprobarse firma, emisor, destinatario y vigencia, con una política de actualización de claves. El backend mantiene la validación del token y la autorización por recurso, aunque esa dependencia no se repita en el diagrama.
-
-**CORS** aplica a clientes de navegador. Las listas de IP se utilizan en conexiones donde tengan sentido; no se presupone una IP fija para cada teléfono.
-
-### Capa 3 · Dominio / backend modular
+## 3. Módulos del backend
 
 | Módulo | Responsabilidad |
-| --- | --- |
-| **Risk & Anti-Fraud Engine** | Evalúa la operación y las señales verificadas antes de autorizar el movimiento. Puede permitir continuar, rechazar o pedir verificación adicional según la política. |
-| **Usuarios y Cuentas** | Comprueba el estado del usuario y su relación con cada cuenta —ownership—, además de los permisos necesarios para operar. |
-| **Transaccional / Movimientos** | Coordina estados, idempotencia, fondos y concurrencia. Confirma la operación solo cuando se cumplen todas las reglas. |
-| **Asistente / Orquestador IA** | Gestiona el chat, limita las funciones disponibles, valida sus parámetros y conserva el contexto del usuario autenticado. Consulta los módulos bancarios o prepara una propuesta para confirmación. |
-
-La decisión de riesgo debe corresponder al monto, destino y contexto que finalmente se ejecutan. En el flujo interno propuesto, las llamadas externas de evaluación ocurren antes de tomar los bloqueos contables; dentro de la transacción se revalidan fondos y reglas.
-
-La **máquina de estados** permite transiciones justificadas y conserva su historial. Un timeout externo puede dejar el resultado pendiente de confirmar. El estado actual puede cambiar; los asientos confirmados y los hechos históricos se conservan.
-
-### Asistente y servicio de IA
-
-Gemini interpreta la solicitud y puede proponer llamadas a funciones. El orquestador comprueba qué función se permite, sus argumentos y los permisos del usuario antes de utilizarla. Las reglas del servidor prevalecen sobre cualquier instrucción del chat o respuesta del modelo.
-
-| Función inicial | Resultado permitido |
 |---|---|
-| `get_account_balance` | Consultar el saldo de una cuenta autorizada mediante el módulo de Cuentas. |
-| `prepare_transfer` | Preparar datos de una transferencia y devolver una propuesta identificada, con vencimiento y confirmación pendiente. No contabiliza movimientos. |
+| **Usuarios y Cuentas** | Resolver al usuario local y validar estado, titularidad —ownership— y permisos por cuenta. |
+| **Risk & Anti-Fraud Engine** | Evaluar riesgo antes de autorizar: permitir, rechazar o solicitar verificación adicional. |
+| **Transaccional / Movimientos** | Coordinar estados, fondos, idempotencia y concurrencia, y contabilizar solo operaciones válidas. |
+| **Asistente / Orquestador IA** | Gestionar conversaciones y validar las funciones que Gemini propone llamar. |
 
-El recorrido propuesto es el siguiente:
+La decisión de riesgo debe corresponder a los datos finalmente ejecutados. Las evaluaciones externas ocurren antes de bloquear cuentas; dentro de la transacción SQL se revalidan fondos y reglas. Los estados registran avances y resultados; un timeout externo puede dejar una operación pendiente de confirmar.
 
-1. La app envía el mensaje por el gateway; el backend valida la sesión y el acceso a la conversación.
-2. El orquestador entrega a Gemini el contexto mínimo necesario y recibe texto o una llamada estructurada.
-3. Una función válida accede al caso de uso autorizado. El backend construye los datos de saldo o de la tarjeta a partir del resultado real; si falla la consulta, informa la indisponibilidad.
-4. Para transferir, el usuario revisa la tarjeta y confirma por una solicitud separada. El backend verifica usuario, propuesta, vencimiento, destino e importe, y aplica permisos, riesgo, step-up cuando corresponda, idempotencia y controles contables.
+### Asistente con Gemini
 
-El LLM no dispone de una función para ejecutar transferencias ni de acceso directo a PostgreSQL, Kafka, secretos o core. La confirmación debe quedar vinculada a los datos exactos que se ejecutan. El motor de riesgo conserva su función independiente del asistente.
+Gemini interpreta el mensaje; el orquestador valida sus propuestas contra funciones y parámetros permitidos. El catálogo inicial contiene:
 
-La conexión con Gemini lleva solo los datos admitidos por la política de contexto. Tokens de usuario, credenciales y claves quedan fuera de los mensajes. El prototipo utiliza datos ficticios; el uso de información real requiere definir su tratamiento, retención y configuración del servicio. Si Gemini falla, el chat devuelve un error controlado y las funciones bancarias directas mantienen su propio flujo.
+- **`get_account_balance`:** consulta el saldo mediante Cuentas, con autorización del usuario.
+- **`prepare_transfer`:** prepara una propuesta identificada y con vencimiento. Todavía no mueve dinero.
 
-Los contratos propuestos y su diferencia con el prototipo están en [04-contratos-api.md](04-contratos-api.md), secciones 6 y 7. Las amenazas específicas se incorporan a [STRIDE](05-threat-model.md).
+El usuario pide la operación, revisa la tarjeta y la confirma mediante una solicitud separada. El servidor recupera los datos canónicos de la propuesta y verifica propietario, vencimiento, confirmación, riesgo, step-up, fondos e idempotencia. Cambiar importe o destino exige una nueva propuesta y confirmación.
 
-### Capa 4 · Persistencia y auditoría
+El modelo no recibe una función de ejecución ni acceso directo a PostgreSQL, Kafka, secretos o core. Los saldos y tarjetas provienen de los módulos bancarios. Se envía a Gemini solo el contexto admitido, sin tokens de usuario ni secretos. Ante un fallo se informa la indisponibilidad; las operaciones bancarias directas conservan su propio flujo. Ver [contrato del asistente](04-contratos-api.md#5-asistente) y [amenazas específicas](05-threat-model.md#asistente-y-secretos).
 
-- **Ledger inmutable (Double-Entry):** cada asiento debe balancear débitos y créditos por moneda. Los asientos confirmados se preservan; una corrección agrega una nueva operación vinculada. Reconstruir saldos requiere un ledger completo, incluyendo apertura y contrapartidas.
-- **Eventos append-only:** agregan el historial de hechos de cada transacción, con identificadores, tipo, versión y secuencia. Guardar únicamente el estado final no permite reconstruir todo lo sucedido. Adoptar Event Sourcing como fuente de verdad sería una decisión adicional.
-- **Outbox transaccional:** en el ejemplo interno, operación, asientos, evento e intención de publicación se guardan en la misma transacción SQL. Los metadatos de entrega pueden actualizarse sin alterar el hecho histórico.
-- **PII Data Vault:** protege datos personales sensibles mediante cifrado, acceso restringido y auditoría. El registro contable utiliza referencias y el mínimo de datos necesario. El diagrama agrupa esta responsabilidad en la capa de persistencia. Queda pendiente definir su aislamiento físico y lógico.
-- **Secrets Manager / KMS — HashiCorp Vault:** Vault es la herramienta incorporada a la propuesta para gestionar credenciales técnicas, incluida la credencial del servicio de IA. Para la función criptográfica puede utilizarse Transit, con políticas separadas para administrar claves y utilizarlas. Transit procesa cifrado y descifrado; el contenido cifrado se conserva en el almacén de datos. Quedan por definir autenticación de servicios, motores, rotación, recuperación y la eventual integración con un KMS externo. El PII Data Vault y HashiCorp Vault tienen responsabilidades diferentes.
+## 4. Persistencia, eventos e integraciones
 
-La inmutabilidad del historial necesita controles de escritura, auditoría de accesos privilegiados, conservación de copias y restauración probada. Estas garantías dependen de los controles de almacenamiento y acceso, además del uso de registros append-only.
+| Concepto | Qué conserva o resuelve |
+|---|---|
+| **Ledger de partida doble** | Entradas balanceadas por operación y moneda. Los asientos confirmados se conservan; una corrección agrega una compensación. Permite reconstruir saldos si incluye aperturas y todas las contrapartidas. |
+| **Eventos append-only** | Historial al que se agregan hechos, sin reescribir los anteriores, con identificador, tipo, versión y secuencia. Complementa el estado actual. Usar Event Sourcing como fuente de verdad sería otra decisión. |
+| **Outbox transaccional** | Tabla de salida que guarda la intención de publicar junto con el cambio de negocio en la misma transacción SQL. Evita confirmar dinero y perder el evento por una caída entre ambas escrituras. |
+| **Kafka** | Broker —intermediario de mensajes— que distribuye los eventos después del commit. Puede haber duplicados: los consumidores deben deduplicar por `event_id` junto con su efecto local. |
+| **Saga, cuando aplique** | Coordina pasos distribuidos y compensaciones cuando una única transacción SQL no alcanza. Una compensación financiera registra una nueva operación. |
 
-### Capa 5 · Integración externa y resiliencia
+Outbox, Kafka y Saga cubren problemas distintos. Kafka utiliza un log append-only, pero su retención, compactación y administración pueden eliminar registros; no reemplaza el ledger ni su conservación.
 
-| Componente | Criterio de implementación |
-| --- | --- |
-| **Event Bus / Message Broker** | Apache Kafka es la opción elegida para la propuesta. Un publicador toma la outbox después del commit y distribuye sus eventos. |
-| **Outbox y consumidores** | La publicación admite reintentos y puede producir duplicados. Cada consumidor persiste su deduplicación por `event_id` junto con el efecto local; un efecto externo necesita su propia estrategia idempotente. |
-| **Circuit Breakers & Timeouts** | Son controles del adaptador que comunica con el core. El timeout limita la espera; el circuit breaker suspende llamadas al alcanzar la condición de fallos definida. |
-| **Core bancario externo** | Se integra mediante un contrato y un adaptador. Deben acordarse identificadores, estados, idempotencia y consulta o conciliación de resultados inciertos. |
-| **Saga, si aplica** | Coordina varios pasos en sistemas independientes mediante estados, reintentos y compensaciones. Una compensación financiera genera una nueva operación según las reglas del negocio. |
+La inmutabilidad requiere restringir escrituras, controlar accesos privilegiados y proteger auditoría y respaldos. El diseño detallado del ledger está en [modelo relacional](02-modelo-relacional.md).
 
-**Outbox y Kafka se complementan:** la outbox coordina el cambio SQL con la intención de publicar; Kafka distribuye eventos. El publicador y los consumidores están resumidos en las notas del broker para mantener el diagrama compacto.
+### Datos personales y claves
 
-Kafka utiliza un log append-only, pero la retención, la compactación y las operaciones administrativas pueden eliminar registros. No sustituye al ledger ni a la política de conservación del historial financiero. Deben definirse clave de particionado, orden por entidad, reintentos y tratamiento de mensajes que no pueden procesarse.
+El **PII Data Vault** almacena información personal identificable —PII— cifrada y con acceso restringido; el ledger conserva referencias y los datos mínimos. Su aislamiento físico y lógico sigue pendiente.
 
-**Resultado incierto:** si el core no responde a tiempo, podría haber procesado el pedido. El resultado debe consultarse o conciliarse antes de repetir el movimiento o declararlo fallido. La degradación ofrece funciones limitadas y explícitas, conservando permisos e indicando la antigüedad de datos en caché.
+**HashiCorp Vault** gestiona secretos técnicos, incluida la credencial de Gemini. Para operaciones criptográficas se evalúa Transit: cifra o descifra, mientras el contenido cifrado se guarda fuera de Vault. Administrar claves, usarlas y leer datos personales requieren permisos separados. Faltan motores, identidades, rotación y recuperación; separar carpetas dentro de un proceso no garantiza ese aislamiento.
 
-## Flujo de una transferencia interna
+### Core y resultados inciertos
 
-El siguiente ejemplo utiliza cuentas ficticias, una misma moneda y operaciones sin comisiones:
+El adaptador del core utiliza **timeouts** para limitar la espera y **circuit breakers** para suspender llamadas ante fallos repetidos. Si vence un timeout, el core podría haber procesado el pedido: se consulta o concilia su estado antes de repetirlo o declararlo fallido.
 
-1. La app envía la solicitud, el access token y la clave de idempotencia.
-2. Gateway y backend validan acceso y permisos. Se comprueban las evidencias requeridas y se evalúa el riesgo antes de autorizar.
-3. El backend reconoce los reintentos del mismo pedido. Para una operación nueva, controla concurrencia e idempotencia dentro de la transacción, bloquea lo necesario y revalida fondos y reglas.
-4. Una sola transacción SQL registra la operación, la partida doble, el evento y la outbox. Se responde con éxito después del commit; un fallo previo revierte el conjunto.
-5. El publicador envía el evento confirmado a Kafka. Los consumidores procesan sus efectos sin duplicarlos.
+Quedan por definir el contrato del core, sus identificadores e idempotencia, y cuál será la fuente oficial del dinero. También faltan el orden por entidad, retención y tratamiento de eventos que no pueden procesarse. Cualquier dato en caché debe indicar su antigüedad y respetar permisos.
 
-Si la respuesta al cliente se pierde, reintentar con la misma clave y contenido recupera la operación existente. Reutilizar la clave con otro contenido se rechaza. La unicidad debe resolver también solicitudes concurrentes, verificando permisos en cada intento.
+## 5. Recorrido de una transferencia interna
 
-Este ejemplo supone que PostgreSQL registra ambos lados de la transferencia interna. **Queda pendiente definir qué sistema será el registro oficial de los movimientos cuando intervenga el core.** Una transacción SQL local no abarca automáticamente al core ni al Data Vault. Saga solo se incorpora cuando exista un flujo distribuido que la necesite.
+Ejemplo entre cuentas distintas en ARS, sin comisiones, suponiendo que PostgreSQL registra ambos lados:
 
-## Controles transversales y definiciones pendientes
+1. La app envía access token, datos confirmados y clave de idempotencia.
+2. Gateway y backend validan acceso; los módulos comprueban permisos, evidencia de confirmación y riesgo.
+3. El backend reconoce reintentos. Para una operación nueva, reclama la clave, bloquea cuentas y revalida fondos dentro de SQL.
+4. Una misma transacción guarda operación, partida doble, evento e intención de publicación. Se responde éxito después del commit; un fallo técnico anterior revierte el conjunto.
+5. El publicador lee la outbox y envía a Kafka; cada consumidor evita repetir su efecto.
 
-Las trazas, logs, métricas y alertas permiten seguir solicitudes, fallos y eventos pendientes. La auditoría conserva los hechos relevantes. Los registros técnicos evitan contraseñas, tokens y datos personales sensibles.
+Si se pierde la respuesta después del commit, la misma clave y contenido recuperan la operación existente. Una transacción SQL local no incluye automáticamente al core ni al Data Vault. Las garantías y restricciones se desarrollan en [02](02-modelo-relacional.md); el esquema de eventos/outbox aún debe completarse.
 
-El modelo de amenazas **STRIDE** acompaña el diseño: suplantación, manipulación, repudio, exposición de información, denegación de servicio y elevación de privilegios. Cada control necesita un escenario y una verificación en `05-threat-model.md`.
+## 6. Decisiones que siguen abiertas
 
-Quedan pendientes las siguientes definiciones:
+- Fuente oficial del dinero, confirmaciones externas y conciliación con el core.
+- Política de riesgo, step-up, atestación y operación del pinning.
+- Aislamiento del Data Vault, permisos y configuración de HashiCorp Vault.
+- Modelo y límites de Gemini, datos admitidos y retención de conversaciones.
+- Contratos de confirmación y esquemas pendientes de datos y eventos.
 
-1. **Ledger y core:** fuente oficial del dinero, estados, evidencia de confirmación y conciliación.
-2. **Riesgo y autenticación adicional:** reglas, vigencia y comportamiento ante indisponibilidad o dispositivos sin soporte.
-3. **Datos y secretos:** aislamiento del Data Vault, configuración de HashiCorp Vault, permisos de descifrado y operación del pinning.
-4. **Eventos y operaciones distribuidas:** retención, orden, reintentos, límites de acumulación y alcance de Saga.
-5. **Asistente:** versión de modelo habilitada en Gemini, límites y timeouts, contexto admitido, conservación de conversaciones y contrato final de preparación/confirmación.
+Las verificaciones y los riesgos pendientes se concentran en [STRIDE](05-threat-model.md).
 
-## Referencias
+## Para profundizar
 
-- [AWS: Transactional Outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html), [Saga](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/saga-orchestration.html) y [reintentos idempotentes](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/).
-- [Apache Kafka: diseño](https://kafka.apache.org/42/design/design/) y [retención y compactación](https://kafka.apache.org/43/configuration/topic-configs/).
-- [OWASP: autorización de transacciones](https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html) y [seguridad REST](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html).
-- [Android: Play Integrity](https://developer.android.com/google/play/integrity/standard) y [seguridad de red y pinning](https://developer.android.com/privacy-and-security/security-ssl).
-- [Apple: App Attest](https://developer.apple.com/videos/play/wwdc2021/10244/) y [AWS: conceptos de KMS](https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html).
-- [Microsoft: Circuit Breaker](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) y [OpenTelemetry: contexto de trazas](https://opentelemetry.io/docs/concepts/context-propagation/).
-
-- [Google: SDK de Gemini](https://ai.google.dev/gemini-api/docs/libraries).
-- [HashiCorp Vault: KV](https://developer.hashicorp.com/vault/docs/secrets/kv), [Transit](https://developer.hashicorp.com/vault/docs/secrets/transit) y [políticas](https://developer.hashicorp.com/vault/docs/concepts/policies).
-- [OWASP: prevención de prompt injection](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html) y [privilegios excesivos en asistentes](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/).
+- AWS: [Transactional Outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html) y [Saga](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/saga-orchestration.html).
+- Apache Kafka: [retención y compactación](https://kafka.apache.org/43/configuration/topic-configs/).
+- Android: [TLS y pinning](https://developer.android.com/privacy-and-security/security-ssl) y [Play Integrity](https://developer.android.com/google/play/integrity/standard). Apple: [App Attest](https://developer.apple.com/videos/play/wwdc2021/10244/).
+- HashiCorp Vault: [Transit](https://developer.hashicorp.com/vault/docs/secrets/transit) y [políticas](https://developer.hashicorp.com/vault/docs/concepts/policies).
+- Microsoft: [Circuit Breaker](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker). OWASP: [autorización de transacciones](https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html).
 
 <details>
 <summary>Diagrama en Mermaid</summary>

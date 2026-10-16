@@ -1,49 +1,38 @@
-# 04 · Contratos de API: autenticación, saldo y asistente
+# 04 · Contratos de API
 
-Presento un borrador de los contratos de autenticación, consulta de saldo y chat con el asistente. Define solicitudes, responsables, respuestas y errores, y complementa el flujo de [autenticación y sesión](03-autenticacion.md).
+Un contrato define qué envía el cliente, qué valida el servidor y cómo responde. Este borrador cubre autenticación, saldo y asistente; permite alinear frontend y backend antes de implementar.
 
-**Estado:** borrador de contratos; configuración, implementación y pruebas pendientes. Los ejemplos contienen datos ficticios.
+**Estado:** contratos propuestos, con ejemplos ficticios. El endpoint de ejecución y confirmación de transferencias sigue pendiente. La demo se desarrolla por separado y sus rutas no constituyen el contrato objetivo.
 
-**Alcance:** inicio de sesión, canje y renovación de tokens, revocación del refresh token, consulta del saldo contable y mensajes del asistente. Se define la respuesta de preparación de una transferencia; el contrato de ejecución y confirmación sigue pendiente.
-
-## 1. Intercambios y responsables
+## 1. Operaciones y responsables
 
 | Operación | Método y destino | Responsable |
 |---|---|---|
-| Iniciar login | `GET authorization_endpoint`, abierto en el navegador del sistema. | Proveedor de identidad. |
-| Canjear código por tokens | `POST token_endpoint`. | Proveedor de identidad. |
-| Renovar tokens | `POST token_endpoint`, con otro `grant_type`. | Proveedor de identidad. |
-| Revocar refresh token | `POST revocation_endpoint`. | Proveedor de identidad. |
-| Consultar saldo | `GET /v1/accounts/{account_id}/balance`. | Nuestro backend, a través del API Gateway. |
-| Enviar un mensaje al asistente | `POST /v1/chat/messages`, propuesto. | Orquestador del backend, con Gemini y funciones autorizadas. |
+| Login | `GET authorization_endpoint`, mediante navegador del sistema. | Proveedor de identidad. |
+| Canje y renovación | `POST token_endpoint`. | Proveedor de identidad. |
+| Revocación | `POST revocation_endpoint`. | Proveedor de identidad. |
+| Saldo | `GET /v1/accounts/{account_id}/balance`. | Backend, a través del gateway. |
+| Chat | `POST /v1/chat/messages`. | Orquestador del backend. |
 
-Los nombres de endpoints OIDC representan URL completas de la configuración confiable del proveedor, verificando su emisor. Las URL reales, el cliente registrado y la redirección quedan pendientes de la selección del proveedor. La revocación deberá estar soportada y configurada. [1][5]
+Los endpoints OIDC son URL completas obtenidas de configuración confiable, verificando el emisor. Cliente, redirecciones y URL reales dependen del proveedor elegido. Todos los intercambios requieren TLS con verificación del extremo remoto.
 
-Los intercambios de red requieren TLS con verificación del extremo remoto. Los límites y la protección del tramo gateway–backend se concretan en el modelo de amenazas.
+## 2. Intercambios con el proveedor de identidad
 
-## 2. Contrato de inicio de sesión
+### Login y canje del código
 
-### Solicitud de autorización
-
-La biblioteca OIDC construye el `GET` al `authorization_endpoint` con estos parámetros: [2][3]
+La biblioteca OIDC construye el `GET authorization_endpoint`:
 
 | Parámetro | Valor o criterio |
 |---|---|
 | `response_type` | `code`. |
-| `client_id` | Identificador registrado; `mobile-ios` en los ejemplos. |
-| `redirect_uri` | URI registrada y coincidente; por ejemplo, `https://app.example.com/oauth/callback`. |
-| `scope` | `openid accounts:read`; `accounts:read` es el permiso de API propuesto. |
-| `state` y `nonce` | Valores aleatorios nuevos por intento. |
-| `code_challenge` | Desafío derivado del verificador PKCE. |
-| `code_challenge_method` | `S256`. |
+| `client_id` y `redirect_uri` | Cliente y retorno registrados; ejemplos: `mobile-ios` y `https://app.example.com/oauth/callback`. |
+| `scope` | `openid accounts:read`; el permiso de API es propuesto. Solicitar `offline_access` si el proveedor lo exige para emitir refresh token. |
+| `state` y `nonce` | Valores nuevos por intento. |
+| `code_challenge` y `code_challenge_method` | Desafío PKCE y `S256`. |
 
-La emisión de refresh tokens depende del proveedor. Si exige `offline_access`, se solicitará con el consentimiento correspondiente. La audiencia de la API también debe quedar configurada. [2]
+La audiencia de la API debe configurarse. El retorno exitoso contiene `code` y `state`; un rechazo puede retornar `error=access_denied`. La biblioteca valida el retorno antes de continuar, como describe [autenticación](03-autenticacion.md#2-login-con-authorization-code--pkce). Una URI inválida no debe recibir la redirección.
 
-**Retorno exitoso:** redirección a la app con `code` y `state`. Un rechazo puede retornar `error=access_denied` y el `state` correspondiente. La biblioteca valida el retorno antes de continuar; los errores de redirección inválida no deben provocar un envío a una URI no confiable.
-
-### Canje del código
-
-La app envía al `token_endpoint` un formulario con `Content-Type: application/x-www-form-urlencoded`: [3][4]
+El canje usa `POST token_endpoint` con `Content-Type: application/x-www-form-urlencoded`:
 
 ```text
 grant_type=authorization_code
@@ -53,9 +42,9 @@ redirect_uri={misma_uri_del_login}
 code_verifier={verificador_del_intento}
 ```
 
-Las líneas muestran campos del formulario: en HTTP se codifican y unen con `&`. Las llaves son marcadores, no valores literales. Para este cliente público no se incluye un secreto embebido.
+Son campos de formulario: en HTTP se codifican y unen con `&`. Las llaves son marcadores. El cliente público no envía un secreto embebido.
 
-**Respuesta `200`, ejemplo con refresh token:**
+**Respuesta `200`, ejemplo:**
 
 ```json
 {
@@ -68,43 +57,24 @@ Las líneas muestran campos del formulario: en HTTP se codifican y unen con `&`.
 }
 ```
 
-`expires_in` se expresa en segundos; **600 es ilustrativo**, no una duración acordada. El ID token corresponde al login OIDC; el refresh token solo aparece si fue emitido. La app valida la respuesta según `03-autenticacion.md`. Las respuestas que contienen tokens usan `Cache-Control: no-store` y `Pragma: no-cache`. [2][4]
+`expires_in` está en segundos; 600 es ilustrativo. El refresh token solo aparece si fue emitido. Las respuestas con tokens llevan `Cache-Control: no-store` y `Pragma: no-cache`.
 
-## 3. Renovación y revocación
+### Renovación y revocación
 
-Ambas solicitudes van al proveedor como formularios, con la identificación del cliente público que este requiera. [2][5]
+También usan formularios y la identificación del cliente público que requiera el proveedor.
 
-| Operación | Campos del formulario | Respuesta esperada |
+| Operación | Campos | Resultado |
 |---|---|---|
-| Renovar | `grant_type=refresh_token`, `refresh_token`; `client_id` según configuración. | `200`: nuevo access token, tipo y expiración; nuevo refresh token bajo la rotación acordada. El ID token es opcional en esta respuesta. |
-| Revocar | `token={refresh_token}`, `token_type_hint=refresh_token`; `client_id` según configuración. | `200` si se revocó o el token ya era inválido; el cliente no depende de un cuerpo de respuesta. |
+| Renovar | `grant_type=refresh_token`, `refresh_token`; `client_id` según configuración. | `200`: nuevo access token, tipo y expiración; nuevo refresh token bajo la rotación acordada. El ID token es opcional. |
+| Revocar | `token={refresh_token}`, `token_type_hint=refresh_token`; `client_id` según configuración. | `200` si se revocó o ya era inválido; no depender de un cuerpo de respuesta. |
 
-Los errores del proveedor mantienen el formato OAuth. Por ejemplo, un código o refresh token inválido puede responder `400`:
+Los errores conservan el formato OAuth: por ejemplo, `400` con `{"error":"invalid_grant"}` para un código o refresh token inválido. La coordinación de renovaciones, recuperación de respuestas perdidas y logout se explica en [03](03-autenticacion.md#4-renovación-y-almacenamiento).
 
-```json
-{
-  "error": "invalid_grant"
-}
-```
+## 3. Consulta de saldo
 
-La app coordina una sola renovación. Una respuesta perdida se trata según la política acordada, sin reutilizar a ciegas el refresh token anterior. El rechazo definitivo requiere un nuevo login. La propuesta de protección utiliza rotación y detección de reutilización. [6]
+**`GET /v1/accounts/{account_id}/balance`** requiere UUID en la ruta, access token y `Accept: application/json`. No recibe cuerpo ni parámetros de consulta.
 
-El logout local elimina las credenciales aunque falle la revocación remota. Invalidar inmediatamente access tokens y cerrar la sesión del navegador son decisiones adicionales, pendientes en el documento de autenticación.
-
-## 4. Contrato de consulta de saldo
-
-**Endpoint propuesto:** `GET /v1/accounts/{account_id}/balance`.
-
-| Entrada | Contrato |
-|---|---|
-| `account_id` | UUID obligatorio en la ruta. |
-| `Authorization` | `Bearer <access_token>` emitido para la API. |
-| `Accept` | `application/json`. |
-| Cuerpo y parámetros de consulta | Ninguno. |
-
-El backend valida el token, resuelve `(iss, sub)`, exige un usuario local activo y el permiso `accounts:read`, y comprueba que la cuenta pertenezca a ese usuario. El identificador de cuenta no concede acceso por sí mismo.
-
-**Solicitud:**
+El backend resuelve al usuario desde `(iss, sub)`, exige estado activo, permiso `accounts:read` y acceso a la cuenta. Conocer su UUID no concede autorización.
 
 ```http
 GET /v1/accounts/6b54190c-4e5f-4d34-9c21-2b8ade1f9001/balance HTTP/1.1
@@ -113,14 +83,7 @@ Authorization: Bearer <access-token-ficticio>
 Accept: application/json
 ```
 
-**Respuesta:**
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-Cache-Control: no-store
-X-Request-ID: b0c48e4f-5c53-47e7-898e-76c3b0554a01
-```
+**Respuesta `200`:**
 
 ```json
 {
@@ -130,21 +93,13 @@ X-Request-ID: b0c48e4f-5c53-47e7-898e-76c3b0554a01
 }
 ```
 
-| Campo | Significado |
-|---|---|
-| `account_id` | UUID de la cuenta consultada. |
-| `currency` | Moneda de la cuenta; ARS en este alcance. |
-| `booked_balance` | Saldo contable como texto decimal, con dos decimales y sin separadores de miles. |
+`booked_balance` es texto decimal con dos decimales y sin separadores de miles. Se calcula desde entradas `POSTED`, incluida la apertura, con una lectura consistente. La apertura y sus contrapartidas aún deben completarse en el [modelo](02-modelo-relacional.md#2-partida-doble-y-saldo).
 
-El saldo se calcula desde las entradas `POSTED`, incluida la apertura, tomando una lectura consistente del ledger. La apertura sigue pendiente de diseño en el modelo lógico. Esta respuesta informa el saldo contable; no incorpora reservas ni pretende representar un saldo disponible con reglas aún no modeladas.
+Este **saldo contable** no incluye reservas ni representa un saldo disponible con reglas todavía no modeladas. La API y el cliente conservan precisión decimal. La consulta no requiere clave de idempotencia ni crea movimientos; las consultas históricas quedan fuera de esta versión.
 
-La API usa decimales exactos internamente y texto para el importe en JSON. El cliente debe conservar esa precisión. Esta consulta es de lectura: no requiere una clave de idempotencia ni crea movimientos. No ofrece consultas históricas en esta versión.
+## 4. Errores comunes
 
-## 5. Errores y comportamiento del cliente
-
-La propuesta utiliza un formato común para los errores controlados del gateway y el backend. La app decide por el estado HTTP y `code`; `message` es informativo.
-
-**Ejemplo de `404`:**
+Saldo, chat y errores del backend usan JSON, `Cache-Control: no-store` y `X-Request-ID`, generado por infraestructura confiable. El identificador se repite en `error.request_id`. La app decide por estado HTTP y `code`; `message` es informativo.
 
 ```json
 {
@@ -156,27 +111,25 @@ La propuesta utiliza un formato común para los errores controlados del gateway 
 }
 ```
 
-| HTTP | `code` | Criterio y acción |
+| HTTP | `code` | Acción del cliente |
 |---|---|---|
-| `400` | `INVALID_ACCOUNT_ID` | UUID inválido. Corregir la solicitud. |
-| `401` | `UNAUTHORIZED` | Token ausente, inválido o vencido. Evaluar renovación; como máximo un reintento por ese motivo. |
-| `403` | `FORBIDDEN` | Falta permiso funcional o el usuario local no está habilitado. No renovar por este error. |
+| `400` | `INVALID_ACCOUNT_ID` | Corregir UUID inválido. |
+| `401` | `UNAUTHORIZED` | Evaluar renovación; máximo un reintento por ese motivo. |
+| `403` | `FORBIDDEN` | Falta permiso o usuario no habilitado; no renovar. |
 | `404` | `ACCOUNT_NOT_FOUND` | Cuenta inexistente o ajena: mismo estado y mensaje. |
 | `429` | `RATE_LIMITED` | Respetar `Retry-After` cuando se informe. |
-| `503` | `SERVICE_UNAVAILABLE` | No se puede obtener un saldo confiable. Mostrar indisponibilidad; nunca reemplazarla por saldo cero. |
-| `500` | `INTERNAL_ERROR` | Fallo inesperado. Mostrar un mensaje genérico y conservar la referencia de soporte. |
+| `503` | `SERVICE_UNAVAILABLE` | Mostrar indisponibilidad; nunca reemplazarla por saldo cero. |
+| `500` | `INTERNAL_ERROR` | Mostrar error genérico y referencia para soporte. |
 
-Los `401` incluyen `WWW-Authenticate: Bearer`; para un token presentado pero inválido, se añade `error="invalid_token"`. La falta del scope requerido usa `403` con `error="insufficient_scope"` en ese encabezado. [7]
+Los `401` incluyen `WWW-Authenticate: Bearer`, con `error="invalid_token"` si se presentó un token inválido. La falta de scope usa `403` y `error="insufficient_scope"` en ese encabezado.
 
-Respuestas de saldo y errores: `Cache-Control: no-store`. La infraestructura confiable genera `X-Request-ID`, lo propaga y lo repite en `error.request_id`. Los errores no exponen tokens, consultas SQL ni datos de otras cuentas. Una falla de transporte puede no tener cuerpo JSON y no demuestra que la sesión sea inválida.
+Una falla de transporte puede no traer JSON y no demuestra que la sesión sea inválida. Los detalles técnicos quedan en diagnóstico restringido; las respuestas no exponen SQL, trazas, tokens ni datos de otras cuentas.
 
-## 6. Contrato propuesto del asistente
+## 5. Asistente
 
-Este contrato alinea la aplicación con la arquitectura objetivo. No describe todavía un endpoint implementado. El prototipo actual se diferencia en la sección 7.
+**`POST /v1/chat/messages`** usa access token y `Content-Type: application/json`. Se propone `chat:use`; las funciones de saldo mantienen `accounts:read` y autorización por cuenta. Los nombres finales de scopes siguen pendientes.
 
-**Endpoint propuesto:** `POST /v1/chat/messages`, con `Authorization: Bearer <access_token>`, `Content-Type: application/json` y respuestas `Cache-Control: no-store`. El permiso de uso del chat se propone como `chat:use`; las consultas de saldo mantienen `accounts:read` y autorización por cuenta. Los nombres finales de scopes quedan por acordar.
-
-**Solicitud inicial, ejemplo:**
+**Solicitud inicial:**
 
 ```json
 {
@@ -186,17 +139,17 @@ Este contrato alinea la aplicación con la arquitectura objetivo. No describe to
 }
 ```
 
-`message` es texto no vacío y con longitud limitada. `conversation_id` nulo inicia una conversación cuyo identificador genera el servidor; en mensajes posteriores, el servidor comprueba su propietario. `account_id` es contexto opcional: si la operación requiere cuenta, se selecciona y autoriza antes de consultar datos. El usuario siempre se resuelve desde el token.
+`message` debe ser texto no vacío y limitado. `conversation_id: null` inicia una conversación identificada por el servidor; en accesos posteriores se comprueba su propietario. `account_id` es contexto opcional y siempre se autoriza antes de usarlo. El usuario se obtiene del token.
 
-La respuesta utiliza un discriminador `type`. El frontend renderiza únicamente los tipos y campos admitidos; el texto del modelo se trata como contenido no confiable.
-
-| `type` | Contenido |
+| `type` de respuesta | Contenido y uso |
 |---|---|
-| `text` | `content` con texto informativo o una pregunta para completar datos. No acredita una ejecución financiera. |
-| `balance` | `data` con el resultado autorizado de Cuentas: identificador, moneda y saldo contable decimal. |
-| `transfer_card` | `data` con una propuesta canónica preparada por el backend y pendiente de confirmación. |
+| `text` | `content`: información o pregunta para completar datos; no acredita una ejecución. |
+| `balance` | `data`: resultado autorizado de Cuentas. |
+| `transfer_card` | `data`: propuesta preparada por el backend, pendiente de confirmación. |
 
-**Respuesta de saldo `200`, ejemplo:**
+La app renderiza solo tipos y campos admitidos. Trata el texto del modelo como contenido no confiable y muestra los valores financieros estructurados del backend.
+
+**Saldo `200`:**
 
 ```json
 {
@@ -210,9 +163,7 @@ La respuesta utiliza un discriminador `type`. El frontend renderiza únicamente 
 }
 ```
 
-Los valores financieros salen del resultado del módulo bancario. El backend conserva ese resultado estructurado y la app lo muestra directamente; el texto generado no sustituye ni modifica el saldo.
-
-**Tarjeta de preparación `200`, ejemplo:**
+**Propuesta de transferencia `200`:**
 
 ```json
 {
@@ -231,66 +182,35 @@ Los valores financieros salen del resultado del módulo bancario. El backend con
 }
 ```
 
-Los identificadores, la hora y el importe son ficticios. El vencimiento real se calcula en el servidor conforme a una duración pendiente de definir. Si faltan monto o destino, se solicita esa información. El backend resuelve el destinatario contra una fuente autorizada; una etiqueta o un identificador inventado por el modelo no bastan.
+Fecha e importe son ficticios; el servidor calcula el vencimiento real. Si falta monto o destino, se pregunta. El destinatario se resuelve contra una fuente autorizada; no basta una etiqueta inventada por Gemini.
 
-`requires_confirmation` es una señal para la interfaz, no una prueba de autorización. Al confirmar, la app enviará `proposal_id` y la clave `X-Idempotency-Key` a un endpoint transaccional separado, cuyo contrato queda pendiente. El servidor verificará pertenencia, vencimiento, contenido, confirmación y step-up exigido, además de riesgo, fondos e idempotencia. Una propuesta solo puede producir una operación efectiva. Cambiar monto o destino exige una nueva propuesta y confirmación.
+`requires_confirmation` orienta a la interfaz, pero no prueba autorización. El usuario revisará la tarjeta y confirmará enviando `proposal_id` y `X-Idempotency-Key` al endpoint transaccional **aún por definir**. El servidor verifica propuesta, propietario, vigencia, datos, confirmación, riesgo, step-up, fondos e idempotencia. Una propuesta solo puede producir una operación efectiva; cambiar monto o destino exige otra confirmación sobre una nueva propuesta.
 
-El catálogo del modelo incluye lectura y preparación; no expone ejecución de transferencias. Repetir un mensaje o una llamada a `prepare_transfer` no debe mover dinero. Si una consulta o ejecución termina con resultado incierto, se consulta su estado por el circuito bancario antes de informar éxito o repetir el efecto.
+Gemini solo puede consultar o preparar. Repetir el mensaje o `prepare_transfer` no mueve dinero. Ante un resultado financiero incierto, se consulta su estado por el circuito bancario antes de informar éxito o repetir el efecto.
 
-**Errores adicionales del chat:** se conserva el formato `error.code`, `error.message` y `error.request_id` de la sección 5.
+### Errores del chat
 
-| HTTP | `code` | Comportamiento |
+Conservan el formato anterior y también aplican `401`, `403`, `429` y los errores de cuenta.
+
+| HTTP | `code` | Significado |
 |---|---|---|
-| `400` | `INVALID_CHAT_REQUEST` | Mensaje o campos inválidos; corregir la solicitud. |
+| `400` | `INVALID_CHAT_REQUEST` | Mensaje o campos inválidos. |
 | `404` | `CONVERSATION_NOT_FOUND` | Conversación inexistente o ajena, con respuesta uniforme. |
-| `409` | `CONVERSATION_BUSY` | Ya hay un turno en proceso; evitar mezclar respuestas concurrentes. |
-| `429` | `RATE_LIMITED` | Aplicar los límites del chat y respetar `Retry-After` cuando se informe. |
-| `502` | `AI_INVALID_RESPONSE` | Respuesta o llamada de función incompatible; no ejecutar la acción. |
-| `503` | `AI_UNAVAILABLE` | Servicio, modelo o configuración de IA no disponibles. |
-| `504` | `AI_TIMEOUT` | Se superó el tiempo total del turno; informar el fallo sin asegurar un resultado financiero. |
+| `409` | `CONVERSATION_BUSY` | Hay un turno en proceso; no mezclar respuestas. |
+| `502` | `AI_INVALID_RESPONSE` | Respuesta o función incompatible; no ejecutar la acción. |
+| `503` | `AI_UNAVAILABLE` | Servicio, modelo o configuración no disponibles. |
+| `504` | `AI_TIMEOUT` | Venció el tiempo total del turno. |
 
-Siguen aplicando `401`/`403` y los errores de cuenta de la sección 5. Los detalles del SDK, nombres internos, trazas y credenciales se registran solo en diagnóstico restringido. El límite total del turno, la cantidad de llamadas a funciones y los reintentos deben ser acotados; un fallo de Gemini no provoca una ejecución financiera automática.
+Tiempo total, funciones por turno y reintentos deben ser acotados. Un fallo de Gemini no autoriza una ejecución automática ni permite inventar resultados.
 
-## 7. Relación con el prototipo de UI y Mock API
+## 6. Pendientes y validación
 
-El prototipo utiliza datos ficticios y rutas simplificadas. La siguiente correspondencia documenta el trabajo necesario para alinearlo; no afirma que esos cambios ya estén implementados.
+Faltan configuración OIDC, política de acceso a cuentas bloqueadas/cerradas, nombres finales de campos y scopes, límites, historial del chat y contrato de confirmación. También deben cerrarse origen del saldo, apertura, modelo de Gemini y política de datos.
 
-| Prototipo | Propuesta de integración |
-|---|---|
-| `POST /api/chat` con `message` y `session_id` | `POST /v1/chat/messages`, con usuario autenticado y `conversation_id` vinculado a ese usuario. |
-| `GET /api/v1/accounts/balance`, con `balance` numérico | `GET /v1/accounts/{account_id}/balance`, con ownership y `booked_balance` como texto decimal. |
-| `GET /api/v1/accounts/transactions` con movimientos estáticos | Consulta de movimientos con autorización y contrato todavía pendiente. |
-| `POST /api/v1/transfers`, con `destination_name` y `amount` | Simulación del prototipo. La ejecución objetivo debe usar una propuesta validada, confirmación e idempotencia; contrato pendiente. |
-| `message_type` en la guía y `type` en el orquestador mostrado | Unificar el discriminador en `type` según este borrador, coordinando frontend y backend. |
+Las pruebas deben cubrir los ejemplos y sus errores, precisión decimal, aislamiento entre usuarios, confirmaciones duplicadas y fallos del proveedor. [STRIDE](05-threat-model.md) reúne los escenarios. Estos contratos no afirman que la demo ya implemente esas garantías.
 
-El adaptador de la API mock transforma las rutas y respuestas sin trasladar las simplificaciones al contrato objetivo. La URL del mock se configura por entorno: si el mock y el orquestador corren en equipos distintos, `localhost` identifica a cada equipo y no al otro servicio.
+## Para profundizar
 
-## 8. Pendientes y verificaciones
-
-| Área | Definición pendiente |
-|---|---|
-| Proveedor OIDC | URL reales, cliente, redirección, audiencia, scopes, emisión y duración de tokens, rotación y revocación. |
-| Acceso a cuentas | Alta del usuario local y política de consulta de cuentas bloqueadas o cerradas. |
-| Contrato final | Nombres de campos y códigos, límites de solicitudes, tiempos de espera y reintentos acotados. |
-| Origen del saldo | Registro local o core externo; completar apertura y contrapartidas antes de usar datos reales. |
-| Chat | Aprobar ruta, scopes, esquema de respuestas, límites, serialización de turnos y conservación del historial. |
-| Preparación y ejecución | Almacenamiento de propuestas, resolución del destino, vencimiento, confirmación y contrato transaccional separado. |
-| Gemini | Modelo accesible, SDK, timeouts, cuotas y política de datos; verificar respuestas con y sin funciones. |
-
-**Verificaciones previstas:** canje y renovación válidos; rechazo de credenciales inválidas; saldo con formato exacto; cuenta ajena e inexistente con la misma respuesta; indisponibilidad sin saldo inventado; límites de reintento y correlación de errores. Para el asistente se suman conversación ajena, parámetros de funciones inválidos, saldo sin resultado verificable, propuesta vencida, doble confirmación y fallos de Gemini. La ejecución de pruebas y la configuración de servicios están pendientes.
-
-## Relación con el modelo de amenazas
-
-El [análisis STRIDE](05-threat-model.md) traza TM-01–TM-04, TM-09–TM-12 y TM-14–TM-18 hacia estos contratos: identidad, acceso por cuenta, errores, límites y validación de entradas. El límite de solicitudes asociado a `429` requiere configuración y pruebas. La validación de un UUID se complementa con consultas parametrizadas y autorización en el backend.
-
-## Referencias
-
-1. [OpenID Connect Discovery: configuración del proveedor](https://openid.net/specs/openid-connect-discovery-1_0.html).
-2. [OpenID Connect Core: autenticación y renovación](https://openid.net/specs/openid-connect-core-1_0.html).
-3. [RFC 7636: PKCE](https://www.rfc-editor.org/rfc/rfc7636.html).
-4. [RFC 6749: solicitudes, respuestas y errores OAuth 2.0](https://www.rfc-editor.org/rfc/rfc6749.html).
-5. [RFC 7009: revocación](https://www.rfc-editor.org/rfc/rfc7009.html).
-6. [RFC 9700: seguridad de OAuth 2.0](https://www.rfc-editor.org/rfc/rfc9700.html).
-7. [RFC 6750: Bearer tokens y errores de acceso](https://www.rfc-editor.org/rfc/rfc6750.html).
-8. [OWASP: autorización de transacciones](https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html).
-9. [OWASP: privilegios excesivos en asistentes](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/).
+- OpenID Connect: [Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html) y [Core](https://openid.net/specs/openid-connect-core-1_0.html).
+- IETF: [solicitudes y errores OAuth](https://www.rfc-editor.org/rfc/rfc6749.html), [revocación](https://www.rfc-editor.org/rfc/rfc7009.html) y [Bearer tokens](https://www.rfc-editor.org/rfc/rfc6750.html).
+- OWASP: [autorización de transacciones](https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html).

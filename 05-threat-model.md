@@ -1,22 +1,27 @@
 # 05 · Modelo de amenazas STRIDE
 
-Presento el análisis inicial de amenazas de la aplicación bancaria. Cada escenario se vincula con los flujos afectados, los controles propuestos y la evidencia necesaria para verificarlos.
+STRIDE ayuda a revisar el diseño preguntando qué puede hacer un atacante en cada flujo, qué control lo limita y cómo demostrar que ese control funciona. El resultado orienta código, configuración y pruebas.
 
-**Estado:** análisis inicial. Los controles están propuestos y su implementación y verificación están pendientes. Las 19 amenazas identificadas permanecen abiertas. Esta revisión incorpora el asistente con Gemini y HashiCorp Vault.
+**Estado:** análisis inicial, con 19 amenazas abiertas. Todos los controles y evidencias de este documento están pendientes de implementación o verificación. La prioridad inicial es alta, salvo TM-09, media; debe revisarse con el despliegue real.
 
-## 1. Alcance y supuestos
+## 1. Alcance y categorías
 
-Incluye app Android e iOS, proveedor OIDC, API Gateway, backend modular, asistente con Gemini, PostgreSQL, HashiCorp Vault, PII Data Vault, auditoría y recuperación. Cubre login, tokens, saldo, chat, preparación de propuestas y diseño de transferencias internas y reversiones. El contrato de ejecución de transferencias todavía no está definido.
+Se consideran app Android/iOS, IdP, gateway, backend, asistente con Gemini, PostgreSQL, auditoría, respaldos, HashiCorp Vault y PII Data Vault. El flujo contable supone registro local; los escenarios detallados de core, Kafka/outbox y atestación aún deben ampliarse.
 
-El alcance de ambas plataformas está confirmado; el framework móvil y la solución de almacenamiento de Android siguen pendientes. TM-02 y TM-03 requieren revisar por plataforma el retorno del login, persistencia, copias, acceso a claves y cierre de sesión. Este análisis común todavía necesita concretarse con las bibliotecas y configuraciones elegidas.
+Se protegen identidad y tokens, dinero e historial, datos personales, conversaciones, propuestas, secretos y disponibilidad. Los actores incluyen atacantes externos, usuarios que alteran solicitudes y dispositivos o cuentas técnicas comprometidos. La autorización se decide en el servidor.
 
-El supuesto actual es que PostgreSQL registra el dinero de forma autoritativa. Incorporar un core externo requiere ampliar los flujos y analizar confirmaciones, duplicados y conciliación entre sistemas.
+| Categoría | Pregunta que guía la revisión |
+|---|---|
+| **S · Suplantación** | ¿Alguien puede hacerse pasar por otra identidad? |
+| **T · Manipulación** | ¿Puede alterar datos o una operación? |
+| **R · Repudio** | ¿Faltaría evidencia confiable para explicar lo ocurrido? |
+| **I · Exposición de información** | ¿Puede leer datos que no le corresponden? |
+| **D · Denegación de servicio** | ¿Puede agotar recursos o impedir operar? |
+| **E · Elevación de privilegios** | ¿Puede obtener permisos que no tiene? |
 
-**Activos:** identidad y tokens; cuentas y saldos; integridad del ledger; evidencias de operaciones; conversaciones y propuestas; datos enviados a Gemini; credenciales técnicas y claves; disponibilidad y copias recuperables.
+Una amenaza puede pertenecer a varias categorías. Por ejemplo, cambiar el UUID de una cuenta pone a prueba tanto confidencialidad como autorización.
 
-**Actores considerados:** atacante externo, usuario autenticado que modifica solicitudes, persona con acceso al dispositivo y proceso o cuenta operativa comprometida. La app puede ser manipulada; las decisiones de autorización se toman en el servidor.
-
-## 2. Flujos y fronteras de confianza
+## 2. Flujos y límites de confianza
 
 ```mermaid
 flowchart TB
@@ -46,123 +51,88 @@ flowchart TB
     BE -.->|"F7: configuración y claves públicas"| IDP
 ```
 
-F1 agrupa el login por navegador del sistema y los intercambios de tokens de la app; su secuencia está en autenticación. La línea discontinua F7 es una dependencia para validar tokens, no una consulta obligatoria por petición.
+Los bloques representan dominios lógicos; su separación real depende de permisos e identidades. F1 incluye navegador y app; F7 obtiene configuración y claves públicas, sin consultar al IdP obligatoriamente en cada petición. Los flujos adicionales están en el [diagrama general](01-arquitectura.md#1-vista-general).
 
-El esquema anterior muestra los flujos base F1–F7. Los cruces adicionales del asistente y de los almacenes protegidos se detallan en la tabla como F8–F11 y están representados a nivel de componentes en [arquitectura](01-arquitectura.md).
-
-Los bloques muestran dominios lógicos de confianza, no una red ya desplegada. Auditoría y respaldos son capacidades a concretar; su ubicación y sus permisos deben impedir que una misma credencial comprometa todas las copias de la evidencia.
-
-| Cruce | Controles a verificar |
+| Flujo | Cruce y control principal |
 |---|---|
-| F1/F7: cliente o backend → identidad | Emisor y URL configurados, redirección registrada, claves confiables y validaciones OIDC/JWT. |
-| F2: cliente → gateway | Canal protegido; límites de entrada; contenido tratado como no confiable. |
-| F3: gateway → backend | Origen permitido, protección del canal y validación de identidad y permisos en el backend. Un encabezado no sustituye al token validado. |
-| F4: backend → base | Identidad del servicio, permisos mínimos, consultas parametrizadas y escrituras financieras controladas. |
-| F5/F6: eventos y recuperación | Accesos diferenciados, integridad, retención y restauración verificable. |
-| F8: orquestador ↔ Gemini | Contexto mínimo admitido, credencial técnica protegida, respuesta no confiable, límites y timeout total. |
-| F9: orquestador → módulos bancarios | Identidad desde sesión validada, funciones permitidas, argumentos y autorización comprobados en el servidor. |
-| F10: backend → HashiCorp Vault | Identidad del servicio y políticas específicas para secretos y uso de claves, con auditoría. |
-| F11: módulos autorizados → PII Data Vault | Acceso mínimo a datos cifrados, permisos de descifrado separados y trazabilidad. |
+| **F1 / F7** | Cliente o backend ↔ IdP: emisor, redirecciones y claves confiables. |
+| **F2** | App ↔ gateway: TLS, entradas no confiables y límites. |
+| **F3** | Gateway ↔ backend: acceso restringido, canal verificado y autorización en backend. |
+| **F4** | Backend ↔ PostgreSQL: identidad técnica, consultas parametrizadas y escritura controlada. |
+| **F5 / F6** | Auditoría y respaldos: permisos separados, integridad y recuperación. |
+| **F8** | Orquestador ↔ Gemini: contexto mínimo, salida no confiable y límites de uso. |
+| **F9** | Orquestador → módulos: funciones permitidas y permisos del usuario validado. |
+| **F10** | Backend → HashiCorp Vault: identidad del servicio y políticas por secreto/operación. |
+| **F11** | Módulos → PII Data Vault: lectura mínima y permisos de descifrado específicos. |
 
-**Requisito propuesto:** proteger los tramos de red con TLS y verificar certificados e identidades del extremo remoto; concretar la autenticación entre servicios al elegir el despliegue. La red interna no elimina estas comprobaciones. [8]
+Los tramos de red requieren TLS y verificación del extremo remoto; faltan concretar autenticación entre servicios y despliegue. Compartir una red o un proceso no garantiza aislamiento.
 
-## 3. Amenazas priorizadas
+## 3. Escenarios, controles y pruebas
 
-STRIDE clasifica amenazas: **S** suplantación, **T** alteración, **R** repudio, **I** exposición de información, **D** denegación de servicio y **E** elevación de privilegios. Una amenaza puede pertenecer a más de una categoría. [1][2]
+Cada fila conserva el identificador de seguimiento. Las pruebas se realizarán en un entorno autorizado con datos ficticios. **Una prueba prevista todavía no es evidencia de un control implementado.**
 
-La prioridad es una estimación inicial según impacto y exposición: **alta** para identidad, dinero, datos privados o continuidad del servicio; **media** para exposición técnica sin secretos ni datos de clientes. Debe revisarse con el entorno real y no representa una medición de probabilidad.
+### Identidad y acceso
 
-| ID | STRIDE | Escenario y flujo afectado | Prioridad |
+Detalle del flujo: [autenticación](03-autenticacion.md).
+
+| ID / categoría | Escenario | Control propuesto | Evidencia esperada |
 |---|---|---|---|
-| TM-01 | S | Presentar un token falso, de otro emisor o destinado a otra aplicación; inducir confianza en claves arbitrarias. F2/F7. | Alta |
-| TM-02 | S/T | Interceptar un código o mezclar respuestas de distintos intentos de login para iniciar otra sesión. F1. | Alta |
-| TM-03 | I/S | Extraer tokens del dispositivo, sus copias, logs o tráfico y reutilizarlos. F1/F2/F5 y persistencia local. | Alta |
-| TM-04 | I/E | Cambiar `account_id` o atribuirse otro usuario para consultar o debitar una cuenta ajena. F2–F4. | Alta |
-| TM-05 | T/E | Enviar importes, monedas u orígenes inválidos, o ejecutar una reversión sin autorización. F2–F4. | Alta |
-| TM-06 | T | Repetir o lanzar operaciones en paralelo para duplicar un efecto o gastar el mismo saldo varias veces. F2–F4. | Alta |
-| TM-07 | T/E | Usar permisos excesivos para insertar movimientos fuera del circuito o modificar el historial confirmado. F4. | Alta |
-| TM-08 | R/T | Borrar o falsificar evidencias, o registrar como confirmada una operación que terminó en rollback. F4/F5. | Alta |
-| TM-09 | I | Provocar errores que revelen consultas SQL, trazas o estructura interna. F2/F3. | Media |
-| TM-10 | D | Saturar la API, las consultas de saldo, la validación de claves o las esperas por bloqueos. F2–F4/F7. | Alta |
-| TM-11 | S/E | Acceder directamente al backend o falsificar encabezados internos para eludir controles del gateway. F3. | Alta |
-| TM-12 | T/I/E | Conseguir que un dato recibido se interprete como parte de una consulta SQL. F2–F4. | Alta |
-| TM-13 | T/D | Tras una alteración o pérdida de datos, descubrir que los respaldos también fueron afectados o no permiten recuperar el ledger. F4/F6. | Alta |
-| TM-14 | S/I/E | Cambiar la conversación o el contexto de usuario para obtener historial, saldo o propuestas ajenas. F2/F3/F9. | Alta |
-| TM-15 | T/E | Instrucciones del chat o contenido recuperado inducen una llamada de función no permitida o con argumentos manipulados. F8/F9. | Alta |
-| TM-16 | I | Enviar a Gemini tokens, secretos o datos personales no necesarios; exponerlos en respuestas o logs. F5/F8/F10/F11. | Alta |
-| TM-17 | D | Bucles de funciones, mensajes excesivos o demoras del proveedor consumen cuotas y recursos del backend. F2/F8/F9. | Alta |
-| TM-18 | T/E/R | Confirmar una propuesta alterada, vencida o ajena, repetir su ejecución o eludir riesgo y step-up desde el chat. F2–F4/F9. | Alta |
-| TM-19 | I/E | Una identidad técnica accede a secretos o descifra datos fuera de sus permisos previstos. F10/F11. | Alta |
+| **TM-01 · S** | Token falso, emisor/audiencia ajenos o claves arbitrarias. F2/F7. | Validar firma, algoritmo, emisor, audiencia, vigencia y perfil; JWKS confiable. | Rechazar tokens inválidos e ID tokens usados para la API, sin consultar URLs del atacante. |
+| **TM-02 · S/T** | Interceptar el código o mezclar retornos de login. F1. | PKCE S256, `state`, `nonce`, redirecciones registradas y biblioteca OIDC. | En ambas plataformas, retorno incorrecto, verificador ajeno o `nonce` inválido no crean sesión; comprobar entrega a la app prevista. |
+| **TM-03 · I/S** | Extraer y reutilizar tokens del dispositivo, copias, logs o tráfico. F1/F2/F5. | Keychain / cifrado con Keystore, access token en memoria, TLS y rotación. | Inspeccionar copias, logs y borrado; probar reutilización, renovación concurrente, logout con respuesta tardía y pérdida de claves sin reducir protección. |
+| **TM-04 · I/E** | Consultar o debitar otra cuenta cambiando identificadores. F2–F4. | Identidad desde `(iss, sub)` y permisos funcionales y por cuenta. | Con dos usuarios, el cambio de UUID no entrega saldo ajeno ni permite debitarlo; ajena e inexistente responden igual. |
 
-## 4. Controles y evidencia esperada
+### Dinero e historial
 
-Las pruebas siguientes se ejecutarán en un entorno autorizado, con datos ficticios. **Estado común de las 19 amenazas: abierto; control propuesto y evidencia pendiente.**
+Detalle de las garantías: [modelo relacional](02-modelo-relacional.md).
 
-| ID | Control propuesto | Evidencia esperada |
-|---|---|---|
-| TM-01 | Validar firma, algoritmo permitido, emisor, audiencia, vigencia y perfil; obtener claves solo de configuración confiable. | Rechazar tokens falsos, vencidos, de otra audiencia o ID tokens usados como acceso; no consultar URL indicadas por un atacante. |
-| TM-02 | Authorization Code con PKCE S256, `state`, `nonce` y redirecciones registradas para cada plataforma, mediante biblioteca OIDC. | En Android e iOS, un retorno con `state` incorrecto, un verificador ajeno o un `nonce` inválido no crea sesión; verificar también la entrega del retorno a la app prevista. |
-| TM-03 | Keychain en iOS; cifrado del refresh token con claves protegidas por Keystore como criterio propuesto para Android, con integración pendiente. Access token en memoria, TLS, secretos fuera de logs y rotación. Acordar duración, revocación y MFA. | Revisar persistencia, copias, logs y borrado de credenciales en ambas plataformas; verificar rotación/reutilización, almacenamiento inaccesible y pérdida de claves sin reducir la protección. |
-| TM-04 | Identidad desde `(iss, sub)` validado; permiso funcional y autorización sobre cada cuenta. | Dos usuarios y cuentas distintas: cambiar el identificador no devuelve saldo ajeno ni permite debitarlo; consulta ajena e inexistente responden igual. |
-| TM-05 | Validar cuenta, moneda, importe exacto y límites; comprobar autorización de transferencia y reversión. | Rechazar importe inválido, moneda incoherente y reversión no autorizada. Un asiento balanceado por sí solo no satisface estas pruebas. |
-| TM-06 | Clave única por usuario, hash del contenido, atomicidad y bloqueo ordenado con nueva lectura del saldo. | Reintentos, fallo entre entradas y operaciones concurrentes no duplican efectos ni exceden los fondos. |
-| TM-07 | Rol de ejecución sin privilegios administrativos ni escritura financiera libre; circuito controlado e historial confirmado protegido. | Con ese rol, rechazar INSERT fuera del circuito y UPDATE/DELETE sobre movimientos confirmados. Revisar también accesos privilegiados. |
-| TM-08 | Auditoría vinculada a identidad, solicitud y operación; confirmaciones consistentes con el commit; intentos registrados fuera del rollback financiero. [6] | Reconstruir intento, resultado y movimientos; un rollback no queda como confirmación. La aplicación no puede borrar evidencias. |
-| TM-09 | Respuestas genéricas con `request_id`, `no-store` y diagnóstico detallado solo en registros restringidos. | Forzar errores controlados y revisar que la respuesta no revele SQL, trazas ni información de otras cuentas. |
-| TM-10 | Límites antes de autenticar y por usuario validado; tamaño y coste acotados, timeouts, espera de bloqueos y reintentos limitados; caché de claves. [7] | Carga controlada y dependencias lentas: aplicar límites sin agotar recursos ni provocar renovaciones o consultas de claves ilimitadas. |
-| TM-11 | Restringir acceso directo; verificar el canal interno; mantener validación y autorización en el backend e ignorar identidades aportadas por encabezados no confiables. | Rechazar acceso desde orígenes no permitidos y encabezados de usuario falsos; una petición sin token válido no obtiene acceso. |
-| TM-12 | Consultas parametrizadas, validación de tipos y permisos mínimos. No concatenar entradas en SQL. [4][5] | Revisar las consultas y comprobar que valores con sintaxis SQL se rechazan o se tratan como datos, sin cambiar la consulta. |
-| TM-13 | Respaldos protegidos con accesos separados, política de retención, verificación de integridad y pruebas de restauración. | Restaurar en un entorno aislado y reconstruir saldos hasta el corte acordado; comprobar pérdida de datos y tiempo de recuperación. |
-| TM-14 | Vincular conversaciones y propuestas al usuario autenticado; comprobar pertenencia en cada acceso y serializar turnos. | Dos usuarios intercambian identificadores y no acceden a historial ni resultados ajenos; las respuestas de turnos concurrentes no se mezclan. |
-| TM-15 | Lista de funciones, esquemas estrictos y autorización fuera del modelo; sin SQL, URLs arbitrarias ni herramienta de ejecución financiera. Tratar la salida como contenido no confiable. [9][10] | Pruebas de instrucciones directas e indirectas con funciones simuladas: ningún efecto fuera de los permisos, aunque el modelo proponga la llamada. |
-| TM-16 | Definir campos admitidos para Gemini; excluir credenciales, minimizar datos y restringir logs e historial. | Inspeccionar solicitudes y registros con datos ficticios; no contienen tokens ni secretos. Un fallo de consulta nunca se presenta como saldo válido. |
-| TM-17 | Limitar mensaje, historial, tokens, llamadas a funciones, concurrencia y tiempo total; acotar reintentos y separar recursos del chat. | Simular demoras, errores y bucles: el turno finaliza con error controlado y las funciones bancarias directas conservan capacidad. |
-| TM-18 | Propuesta canónica con propietario, contenido y vencimiento; confirmación separada verificada, vínculo único a la operación y controles financieros completos. [11] | Alteración, expiración o confirmación ajena se rechazan. Confirmaciones simultáneas, incluso con claves distintas, producen como máximo un movimiento. |
-| TM-19 | Políticas de Vault por servicio, secreto y operación; separar administración de claves, uso de claves y lectura de PII. [12] | La identidad del adaptador de IA obtiene solo su credencial autorizada; no lee otros secretos, no administra claves ni descifra PII. Revisar accesos privilegiados. |
+| ID / categoría | Escenario | Control propuesto | Evidencia esperada |
+|---|---|---|---|
+| **TM-05 · T/E** | Importe, moneda u origen inválidos; reversión no autorizada. F2–F4. | Validar datos exactos, límites y autorización de transferencia/reversión. | Rechazar esos casos aunque las entradas propuestas sumen cero. |
+| **TM-06 · T** | Duplicar efectos o gastar simultáneamente el mismo saldo. F2–F4. | Clave única y hash, atomicidad, bloqueos ordenados y nueva lectura del saldo. | Reintentos simultáneos, respuesta perdida tras commit, fallo entre entradas y operaciones distintas no duplican efectos ni exceden fondos. |
+| **TM-07 · T/E** | Escribir fuera del circuito o modificar asientos confirmados. F4. | Rol sin privilegios administrativos, contabilización controlada e historial protegido. | Rechazar INSERT fuera del circuito y UPDATE/DELETE de confirmados; revisar accesos privilegiados. |
+| **TM-08 · R/T** | Borrar evidencias o registrar como confirmado un rollback. F4/F5. | Auditoría vinculada a actor y operación; confirmaciones consistentes con commit e intentos fuera del rollback financiero. | Reconstruir intento y resultado; un rollback no aparece confirmado y la aplicación no borra evidencias. |
 
-La autorización por recurso debe comprobarse en cada operación protegida. [3] La partida doble aporta coherencia contable; necesita autorización, integridad y control de quién puede escribir para proteger el dinero.
+### Plataforma y operación
 
-## 5. Responsabilidades y vínculos
+| ID / categoría | Escenario | Control propuesto | Evidencia esperada |
+|---|---|---|---|
+| **TM-09 · I** | Exponer SQL, trazas o estructura interna en errores. F2/F3. | Respuesta genérica, `request_id`, `no-store` y diagnóstico restringido. | Forzar errores sin revelar detalles internos ni datos de clientes. |
+| **TM-10 · D** | Saturar API, saldo, búsquedas de claves o bloqueos. F2–F4/F7. | Límites antes de autenticar y por usuario, caché JWKS, tamaño/coste y esperas acotados. | Carga y dependencias lentas no agotan recursos ni disparan consultas de claves o renovaciones ilimitadas. |
+| **TM-11 · S/E** | Evadir el gateway o falsificar encabezados internos. F3. | Acceso directo restringido, canal verificado y validación/autorización en backend. | Origen no permitido o encabezado falso no dan acceso; el backend exige token válido. |
+| **TM-12 · T/I/E** | Convertir una entrada en parte de una consulta SQL. F2–F4. | Consultas parametrizadas, tipos validados y permisos mínimos. | Revisar consultas y comprobar que la entrada se rechaza o trata como dato, sin cambiar SQL. |
+| **TM-13 · T/D** | Perder el ledger y descubrir respaldos inutilizables. F4/F6. | Copias con acceso separado, retención, integridad y restauración probada. | Restaurar en aislamiento y reconstruir saldo, apertura y reversión hasta el corte acordado; medir pérdida y tiempo de recuperación. |
 
-Las responsabilidades se agrupan por área. Queda pendiente asignar responsables y revisores; esta distribución no define servicios adicionales.
+### Asistente y secretos
 
-| Área | Amenazas principales | Documento relacionado |
-|---|---|---|
-| Móvil e identidad | TM-01–TM-03 | [Autenticación](03-autenticacion.md), secciones 1–4. |
-| Backend y datos | TM-04–TM-08, TM-12 | Modelo lógico, secciones 2–5; contratos de saldo y futuros contratos de transferencias. |
-| Plataforma y operación | TM-07–TM-11, TM-13 | Controles de acceso, transporte, auditoría, límites y recuperación de este análisis. |
-| Backend y móvil | TM-04, TM-09, TM-10 | [Contratos de API](04-contratos-api.md), secciones 4–5. |
-| Asistente, backend y móvil | TM-14–TM-18 | Contratos, secciones 6–8; autenticación y modelo lógico. |
-| Plataforma, secretos y datos | TM-16, TM-19 | Arquitectura, capa 4; políticas de Vault y aislamiento de datos. |
+Detalle del intercambio: [contrato del asistente](04-contratos-api.md#5-asistente).
 
-## 6. Decisiones abiertas y riesgo residual
+| ID / categoría | Escenario | Control propuesto | Evidencia esperada |
+|---|---|---|---|
+| **TM-14 · S/I/E** | Acceder a conversación, saldo o propuesta ajenos. F2/F3/F9. | Propietario desde usuario autenticado, autorización por acceso y turnos serializados. | Intercambiar identificadores no entrega datos ajenos; turnos concurrentes no mezclan respuestas. |
+| **TM-15 · T/E** | Instrucciones del chat o contenido recuperado inducen funciones indebidas. F8/F9. | Lista permitida, esquemas estrictos y autorización fuera del modelo; sin SQL, URLs arbitrarias ni ejecución financiera. | Instrucciones directas e indirectas no producen efectos fuera de permisos, aunque Gemini proponga la llamada. |
+| **TM-16 · I** | Enviar a Gemini o registrar secretos y datos innecesarios. F5/F8/F10/F11. | Campos de contexto admitidos, minimización y logs/historial restringidos. | Inspeccionar mensajes y registros sin tokens ni secretos; un fallo de consulta no se presenta como saldo válido. |
+| **TM-17 · D** | Bucles de funciones, mensajes excesivos o demoras consumen recursos. F2/F8/F9. | Limitar mensajes, historial, tokens, funciones, concurrencia, tiempo total y reintentos; separar capacidad del chat. | Simular demoras y bucles: error controlado y capacidad conservada para operaciones directas. |
+| **TM-18 · T/E/R** | Ejecutar propuesta alterada, vencida, ajena o duplicada; eludir riesgo. F2–F4/F9. | Propuesta canónica, confirmación separada verificada, vínculo único y controles financieros. | Preparar no mueve dinero; propuestas inválidas se rechazan y confirmaciones concurrentes con claves distintas generan máximo una operación. |
+| **TM-19 · I/E** | Identidad técnica obtiene secretos o descifra PII fuera de su función. F10/F11. | Políticas de Vault por servicio/secreto/operación; separar administración y uso de claves de lectura de PII. | El adaptador de IA obtiene solo su credencial; no administra claves ni descifra PII. Revisar privilegios efectivos, incluso dentro de un proceso compartido. |
 
-- **Protección local en Android:** confirmar una implementación mantenida, versiones soportadas y políticas de claves, copias y recuperación. La referencia inicial a `EncryptedSharedPreferences` está deprecada; el reemplazo y su verificación siguen pendientes. Los criterios se detallan en [autenticación](03-autenticacion.md), sección 4.
-- **Sesión comprometida:** un bearer token válido robado puede utilizarse mientras siga vigente. Queda pendiente definir duración, revocación, MFA y reautenticación para operaciones sensibles; Keychain y PKCE no eliminan por sí solos ese riesgo.
-- **Acceso privilegiado:** proteger las escrituras de la aplicación no protege automáticamente frente a un administrador comprometido. Faltan separación de permisos, controles sobre la operación y protección independiente de evidencias y respaldos.
-- **Consentimiento de una operación:** una identidad técnica válida no demuestra por sí sola la intención del titular. Queda pendiente definir la política de confirmación de transferencias y reversiones.
-- **Gemini y conversaciones:** definir modelo, cuotas, límites de funciones, datos admitidos, retención y comportamiento ante fallos. El filtrado del prompt necesita autorización y validación en cada función; por sí solo no asegura el control.
-- **Vault y datos personales:** concretar identidades, políticas, motores, rotación, auditoría, recuperación y alcance de descifrado. El cifrado no evita el abuso de una identidad que ya tiene permisos legítimos.
-- **Eventos y core:** queda pendiente ampliar escenarios y pruebas de publicación outbox/Kafka, retención, fallos de consumidores, atestación de dispositivo y conciliación con sistemas externos.
-- **Configuración real:** faltan IdP/Gateway, despliegue, límites, timeouts, esquema de auditoría y objetivos de recuperación. No se asigna riesgo residual como aceptado mientras estas decisiones y sus verificaciones sigan abiertas.
+## 4. Riesgos y definiciones pendientes
 
-## 7. Mantenimiento del análisis
+- **Sesión comprometida:** un bearer token robado puede usarse mientras siga válido. Faltan duración, revocación, MFA, step-up y la solución mantenida de almacenamiento Android.
+- **Acceso privilegiado:** proteger el rol de la aplicación no cubre a un administrador comprometido. Deben concretarse separación de permisos, protección de evidencia y restauración.
+- **Intención del usuario:** la identidad técnica no demuestra consentimiento. Falta cerrar la confirmación vinculada a los datos y el tratamiento de reversiones.
+- **Gemini y Vault:** acordar datos admitidos, retención, cuotas, límites, identidades y recuperación. El prompt necesita controles del servidor; cifrar tampoco evita el abuso de un permiso legítimo de descifrado.
+- **Flujos por ampliar:** publicación y consumidores outbox/Kafka, retención, pinning/atestación y conciliación con el core. No se consideran cubiertos por nombrarlos en el diagrama.
 
-Antes de implementar cada flujo deben revisarse sus amenazas y definirse los controles pendientes. Cada ID debe vincularse al cambio que implementa el control y a su evidencia de prueba. El registro debe incluir responsable, fecha, resultado y riesgo residual. El cierre o la aceptación de un riesgo requiere una decisión explícita del equipo.
+## 5. Seguimiento
 
-El análisis debe actualizarse al elegir stack y proveedor, incorporar endpoints o roles, cambiar almacenamiento o despliegue, integrar un core externo o descubrir un fallo. [1]
+Al implementar cada flujo, vincular su ID de amenaza con el cambio, responsable y evidencia: fecha, prueba, resultado y riesgo restante. El cierre o aceptación requiere una decisión explícita del equipo.
 
-## Referencias
+Actualizar el análisis al elegir proveedores, incorporar endpoints o roles, cambiar almacenamiento/despliegue o integrar el core. Las pruebas de este documento centralizan las comprobaciones de seguridad de las demás secciones.
 
-1. [OWASP: proceso de threat modeling](https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html).
-2. [Microsoft: categorías STRIDE](https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats).
-3. [OWASP: autorización](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html).
-4. [OWASP: seguridad de bases de datos](https://cheatsheetseries.owasp.org/cheatsheets/Database_Security_Cheat_Sheet.html).
-5. [OWASP: prevención de inyección SQL](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html).
-6. [OWASP: registro de eventos](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
-7. [OWASP: denegación de servicio](https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html).
-8. [OWASP: seguridad del transporte](https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html).
-9. [OWASP: prevención de prompt injection](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html).
-10. [OWASP: privilegios excesivos en asistentes](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/).
-11. [OWASP: autorización de transacciones](https://cheatsheetseries.owasp.org/cheatsheets/Transaction_Authorization_Cheat_Sheet.html).
-12. [HashiCorp Vault: políticas](https://developer.hashicorp.com/vault/docs/concepts/policies).
+## Para profundizar
+
+- OWASP: [proceso de threat modeling](https://cheatsheetseries.owasp.org/cheatsheets/Threat_Modeling_Cheat_Sheet.html). Microsoft: [categorías STRIDE](https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats).
+- OWASP: [autorización](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html), [SQL injection](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html) y [auditoría](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
+- OWASP: [prompt injection](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html) y [privilegios excesivos del asistente](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/).
+- [HashiCorp Vault: políticas](https://developer.hashicorp.com/vault/docs/concepts/policies).
